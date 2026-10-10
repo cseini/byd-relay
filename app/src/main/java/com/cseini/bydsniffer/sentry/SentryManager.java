@@ -566,6 +566,7 @@ public final class SentryManager {
             o.put("spaceState", spaceStateName(spaceLevelCache));   // ok|warn|critical|full — when_full=stop일 때만 ok가 아닐 수 있음. 앱이 열릴 때 팝업 판단용
             o.put("spacePct", spacePctCache);
             o.put("whenFull", settings.whenFull);
+            o.put("leftoverEvents", leftoverCount);   // 내장에 임시로 녹화돼 외장으로 옮겨질 차례를 기다리는 이벤트 수(0이면 없음)
             JSONObject ls = lastSummaryJson;
             if (ls == null) {   // 릴레이가 재시작된 뒤에도 마지막 요약을 보여 준다
                 try {
@@ -1290,6 +1291,65 @@ public final class SentryManager {
             eventsCache = index.allOldestFirst().size();
         } catch (Throwable t) { log("용량 집계 실패 — " + t); }
         try { updateSpace(); } catch (Throwable t) { log("저장 공간 점검 실패 — " + t); }
+        try { maybeMigrate(); } catch (Throwable t) { log("내장 영상 옮기기 실패 — " + t); }
+    }
+
+    // ── 내장에 남은 영상을 외장으로 옮기기(운영자 10-10 "작은 기능") — io 스레드, 한 번에 이벤트 하나, 20초 간격 ──
+    static final long MIGRATE_EVERY_MS = 20_000L, MIGRATE_MIN_AGE_MS = 180_000L, MIGRATE_RETRY_MS = 300_000L;
+    static final int MIGRATE_MIN_FREE_MB = 300;
+    private long lastMigrateElapsed;
+    private volatile int leftoverCount;   // 내장 단계에 남아 옮길 차례를 기다리는 이벤트 수(상태 표시용)
+
+    private void maybeMigrate() {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastMigrateElapsed < MIGRATE_EVERY_MS) return;
+        lastMigrateElapsed = now;
+        SentryStorage st = storage;
+        SentryIndex ix = index;
+        SentrySettings s = settings;
+        SentryHost hs = host;
+        if (st == null || ix == null || s == null || hs == null) return;
+        if (!st.migrationTargetReady()) { leftoverCount = 0; return; }   // 외장에 쓰고 있지 않으면 옮길 곳이 없다
+        if (state == State.RECORDING || clearing.get() || hs.lowVoltage() || storageYield != null) return;   // 녹화·삭제·저전압·저장소 양보 중엔 건드리지 않는다
+        if (st.leftoverRoots().isEmpty()) { leftoverCount = 0; return; }
+        String rec = recordingEventId();
+        long cutoff = System.currentTimeMillis() - MIGRATE_MIN_AGE_MS;
+        String candId = null;
+        File candDir = null;
+        int n = 0;
+        for (SentryIndex.EventMeta m : ix.allOldestFirst()) {
+            File d = st.leftoverDir(m.id);
+            if (d == null) continue;
+            n++;
+            if (candId == null && !m.id.equals(rec) && SentryStorage.lastModifiedTree(d) < cutoff) { candId = m.id; candDir = d; }
+        }
+        leftoverCount = n;
+        if (candId == null) return;
+        long sizeMb = Math.max(1L, dirBytes(candDir) / (1024L * 1024L));
+        File destRoot = st.root();
+        if (st.freeMb(destRoot) < sizeMb + MIGRATE_MIN_FREE_MB) { lastMigrateElapsed = now + MIGRATE_RETRY_MS - MIGRATE_EVERY_MS; log("내장 영상 옮기기 미룸 — 외장 여유 부족"); return; }
+        long limit = st.limitMb();
+        if (limit > 0 && st.usedMb() + sizeMb > limit) return;   // 한도를 넘기게 될 영상은 옮기지 않는다(자동 삭제 모드면 오래된 것부터 정리됨)
+        if (s.whenFullStop() && spaceLevelCache >= 3) return;
+        try {
+            long t0 = SystemClock.elapsedRealtime();
+            long b = SentryStorage.moveEventDir(candDir, destRoot, SentryStorage.eventRel(candId));
+            SentryIndex.bumpRev();
+            leftoverCount = Math.max(0, n - 1);
+            log("내장에 남은 영상을 외장으로 옮김 " + candId + " " + (b / (1024L * 1024L)) + "MB, " + (SystemClock.elapsedRealtime() - t0) + "ms (남은 " + leftoverCount + "개)");
+        } catch (IOException e) {
+            lastMigrateElapsed = now + MIGRATE_RETRY_MS - MIGRATE_EVERY_MS;   // 실패하면 5분 뒤에 다시(원본은 그대로)
+            log("내장 영상 옮기기 실패 " + candId + " — " + e.getMessage());
+        }
+        try { SentryStorage.cleanMovingLeftovers(destRoot, 3600_000L); } catch (Throwable ignored) {}
+    }
+
+    private static long dirBytes(File f) {
+        if (f.isFile()) return f.length();
+        long sum = 0;
+        File[] kids = f.listFiles();
+        if (kids != null) for (File k : kids) sum += dirBytes(k);
+        return sum;
     }
 
     // 저장 공간 단계 — 0 여유 · 1 80%↑ · 2 95%↑ · 3 가득(한도 도달, 또는 기기 여유가 500MB 미만). 순수 계산이라 JVM에서 시험한다.

@@ -8342,12 +8342,25 @@ public class SnifferService extends Service {
         if (p == null || prefs == null) return "형식 오류";
         if (p.has("adjust")) {   // ★745 씨라7도 허용(보조 켬일 때 헤드유닛 창)
             int sd = p.optInt("adjust");
-            if (sd == 8 && clusterCam.revSplit()) {   // ★748 후진 D = 왼쪽·오른쪽 따로 창 둘 다 조정
+            int arr = sd == 8 && clusterCam.revSplit() ? clusterCam.revArr() : 0;
+            if (sd == 8 && clusterCam.revSplit() && arr == 0) {   // ★748 후진 D = 왼쪽·오른쪽 따로 창 둘 다 조정
                 if (huOverlay != null) huOverlay.adjust(82);
                 if (huOverlay2 != null) huOverlay2.adjust(84);
-            } else if (huOverlay != null) huOverlay.adjust(sd);
-            postToD1("HUASSIST", "위치·크기 조정 창 " + sd + (sd == 8 && clusterCam.revSplit() ? "(D 왼쪽·오른쪽 따로)" : ""));
+            } else if (huOverlay != null) huOverlay.adjust(sd == 8 && arr != 0 ? (arr == 1 ? 85 : 86) : sd);   // ★815 붙인 한 창이면 그 창 하나
+            postToD1("HUASSIST", "위치·크기 조정 창 " + sd + (sd == 8 && clusterCam.revSplit() ? (arr == 0 ? "(D 왼쪽·오른쪽 따로)" : arr == 1 ? "(D 가로로 붙임)" : "(D 세로로 붙임)") : ""));
             return null;   // ★731 null=성공(명령 규약) — 문자열을 돌려주면 BLE·워커 경로에선 실패로 보였다
+        }
+        // ★815 후진 D 헤드유닛 배치(0 따로 창 · 1 가로 · 2 세로) — 폰 990~이 함께 보낸다. 없으면(구버전 폰) 저장값 그대로. 이것만 온 명령이면 다른 설정은 그대로.
+        if (p.has("rev_arr")) {
+            int arr = Math.max(0, Math.min(2, p.optInt("rev_arr", 0)));
+            if (arr != prefs.getInt("hu_rev_arr", 0)) {
+                prefs.edit().putInt("hu_rev_arr", arr).apply();
+                postToD1("HUASSIST", "후진 창 배치 " + (arr == 0 ? "왼쪽·오른쪽 따로 창" : arr == 1 ? "가로로 붙인 한 창" : "세로로 붙인 한 창") + " — 다음 후진부터 적용");
+            }
+            if (!p.has("place") && !p.has("turn") && !p.has("rev") && !p.has("hide_ms")) {
+                publishHuAssist();
+                return null;
+            }
         }
         // ★739 신호가 끝나고 영상이 사라지기까지(0~3초, 0.1초 단위, 기본 1초) — 폰 964~가 함께 보낸다. 이것만 온 명령이면 다른 설정은 그대로.
         if (p.has("hide_ms")) {
@@ -8384,6 +8397,7 @@ public class SnifferService extends Service {
         relay.putStatus("hu_assist", (prefs.getBoolean("hu_assist_turn", false) ? "turn" : "") + "," + (prefs.getBoolean("hu_assist_rev", false) ? "rev" : ""));
         relay.putStatus("assist_cfg", "t" + (prefs.getBoolean("assist_on_turn", false) ? 1 : 0) + "r" + (prefs.getBoolean("assist_on_rev", false) ? 1 : 0) + "@" + prefs.getString("assist_place", "phone"));   // ★729 폰이 자기 설정과 비교해 다르면 다시 보낸다
         relay.putStatus("assist_hide", prefs.getInt("hu_hide_ms", 1000));   // ★739 따로 둔다(assist_cfg 모양을 바꾸면 963 이하 폰이 1분마다 다시 보냄)
+        relay.putStatus("assist_rev_arr", prefs.getInt("hu_rev_arr", 0));   // ★815 후진 D 헤드유닛 배치 — 따로 둔다(같은 이유). 이 값이 있으면 폰은 '이 릴레이가 배치 선택을 지원'으로 본다
     }
     // ★739 재부팅 루틴 방지(운영자 10-04 "일렉트로처럼") — BYD 클라이언트 설정 서비스(CloudReboot)는 시동 꺼짐·잠금 상태에서 헤드유닛이 24시간
     //   (72시간·7일 기준도 있음) 넘게 켜져 있으면 reboot("bydcloud")로 재부팅한다(운영자 차 10-02 15:46·10-03 15:39·10-04 18:44, 그때마다 릴레이도 끊김).
@@ -9566,11 +9580,19 @@ public class SnifferService extends Service {
         private boolean huShow(int sd) { return huOverlay != null && !allStopOn() && huOverlay.wants(sd); }
         /** ★748 후진 화면 D(좌·우만)면 헤드유닛엔 왼쪽·오른쪽 따로 창(폰은 나란히 한 장). 씨라7은 A·B·C·D를 안 씀. */
         boolean revSplit() { return !IS_D5 && "D".equals(revLayout()); }
+        /** ★815 후진 D 헤드유닛 배치 — 0=왼쪽·오른쪽 따로 창(기본) · 1=가로로 붙인 한 창 · 2=세로로 붙인 한 창(왼쪽이 위). 폰이 HUASSIST rev_arr로 정한다. */
+        int revArr() { return prefs == null ? 0 : Math.max(0, Math.min(2, prefs.getInt("hu_rev_arr", 0))); }
         private void huDisplay(int sd) {
             if (huOverlay == null) return;
             boolean ok = !allStopOn();
-            if (sd == 8 && revSplit()) {   // ★748 왼쪽은 huOverlay(82), 오른쪽은 huOverlay2(84)
-                huOverlay.onDisplay(82, ok);
+            if (sd == 8 && revSplit()) {
+                int arr = revArr();
+                if (arr != 0) {   // ★815 붙인 한 창(85=가로·86=세로)은 huOverlay가 맡고 오른쪽 따로 창은 닫는다
+                    huOverlay.onDisplay(arr == 1 ? 85 : 86, ok);
+                    if (huOverlay2 != null) huOverlay2.onDisplay(0, ok);
+                    return;
+                }
+                huOverlay.onDisplay(82, ok);   // ★748 왼쪽은 huOverlay(82), 오른쪽은 huOverlay2(84)
                 if (huOverlay2 != null) huOverlay2.onDisplay(84, ok);
                 return;
             }
@@ -9595,7 +9617,7 @@ public class SnifferService extends Service {
             long now = System.currentTimeMillis();
             boolean want = keepWanted();
             if (huOverlay != null) huOverlay.standby(want && (huShow(2) || huShow(8)));   // ★739 헤드유닛 표시면 창도 미리 만들어 숨겨 둠
-            if (huOverlay2 != null) huOverlay2.standby(want && huShow(8) && revSplit());   // ★748 후진 D 오른쪽 따로 창도
+            if (huOverlay2 != null) huOverlay2.standby(want && huShow(8) && revSplit() && revArr() == 0);   // ★748 후진 D 오른쪽 따로 창도(★815 붙인 한 창이면 안 만듦)
             if (want) {
                 if (active || now < keepRetryAt) return;
                 if (takingRtc || rtcActive || camStreaming || h264Streaming || camProbing || (detectActive && (detectAvm || !camDualOk()))) return;
@@ -9704,8 +9726,27 @@ public class SnifferService extends Service {
                     int dw = bw & ~1, dh = bh & ~1;
                     if (dw < 32 || dh < 32) return null;
                     com.cseini.motiondetect.ViewWarp w = revSideWarp(sd, tt, qw, qh, dw, dh);   // ★751 차주 조정값(없으면 기본)
-                    return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, dw, dh, bw, bh);
+                    return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, new int[]{0}, dw, dh, bw, bh);
                 } catch (Throwable t) {
+                    if (!key.equals(huFailKey)) { huFailKey = key; postToD1("HUASSIST", "창 보정표 실패 side=" + sd + " " + rootMsg(t)); }
+                    return null;
+                }
+            }
+            if (sd == 85 || sd == 86) {   // ★815 후진 D 왼쪽·오른쪽을 한 창에 붙임 — 85=가로(왼쪽|오른쪽) · 86=세로(위 왼쪽·아래 오른쪽). 칸마다 82·84와 같은 화면을 창 비율에 맞춰 가득(칸 사이 6px 검정)
+                String key = sd + "|" + fw + "x" + fh + "|" + bw + "x" + bh + "|" + ccamGen;
+                if (prev != null && prev.key.equals(key)) return prev;
+                com.cseini.motiondetect.ViewWarp w1 = null;
+                try {
+                    final int SEP = 6; boolean hor = sd == 85;
+                    int dw = (hor ? (bw - SEP) / 2 : bw) & ~1, dh = (hor ? bh : (bh - SEP) / 2) & ~1;
+                    if (dw < 32 || dh < 32) return null;
+                    int[] tl = tileRect(fw, fh, 2), tr = tileRect(fw, fh, 4);
+                    w1 = revSideWarp(82, tl, tl[2], tl[3], dw, dh);
+                    com.cseini.motiondetect.ViewWarp w2 = revSideWarp(84, tr, tr[2], tr[3], dw, dh);
+                    return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w1, w2}, new int[]{0, hor ? dw + SEP : 0}, new int[]{0, hor ? 0 : dh + SEP},
+                            hor ? 2 * dw + SEP : dw, hor ? dh : 2 * dh + SEP, bw, bh);
+                } catch (Throwable t) {
+                    if (w1 != null) w1.close();   // 둘째 칸이 실패하면 만든 첫 칸 보정표를 놓아준다
                     if (!key.equals(huFailKey)) { huFailKey = key; postToD1("HUASSIST", "창 보정표 실패 side=" + sd + " " + rootMsg(t)); }
                     return null;
                 }
@@ -9720,7 +9761,7 @@ public class SnifferService extends Service {
                     if (W < 64 || H < 32) return null;
                     int[] xs = new int[3];
                     com.cseini.motiondetect.ViewWarp[] ws = revWarps(lay, fw, fh, W, H, xs);
-                    return new HuAssistOverlay.Layout(key, ws, java.util.Arrays.copyOf(xs, ws.length), W, H, bw, bh);
+                    return new HuAssistOverlay.Layout(key, ws, java.util.Arrays.copyOf(xs, ws.length), new int[ws.length], W, H, bw, bh);
                 }
                 int[] tr = tileRect(fw, fh, sd); int qw = tr[2], qh = tr[3];
                 org.json.JSONObject c = cfg.isEmpty() ? null : new org.json.JSONObject(cfg);
@@ -9729,7 +9770,7 @@ public class SnifferService extends Service {
                 if (dw < 32 || dh < 32) return null;
                 com.cseini.motiondetect.ViewWarp w = c != null ? customWarp(c, tr, qw, qh, dw, dh)
                         : new com.cseini.motiondetect.ViewWarp(tr[0], tr[1], qw, qh, 0, 0, qw, qh, false, 160f, 0f, false, dw, dh, false, 0f, 0f, 0f, 0f);
-                return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, dw, dh, bw, bh);
+                return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, new int[]{0}, dw, dh, bw, bh);
             } catch (Throwable t) {
                 if (!key.equals(huFailKey)) { huFailKey = key; postToD1("HUASSIST", "창 보정표 실패 side=" + sd + " " + rootMsg(t)); }
                 return null;

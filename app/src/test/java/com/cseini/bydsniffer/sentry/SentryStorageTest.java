@@ -4,7 +4,13 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 /**
  * Context·StatFs·파일시스템이 필요한 부분(root 폴백, volumesJson, prune, cleanOrphans)은 실기 검증,
@@ -70,5 +76,111 @@ public class SentryStorageTest {
         assertEquals(0.0, SentryStorage.calcEstimateHours(0, 1500), 0.0);
         assertEquals(0.0, SentryStorage.calcEstimateHours(10000, 0), 0.0);
         assertEquals(0.0, SentryStorage.calcEstimateHours(-1, 1500), 0.0);
+    }
+
+    // ── 내장에 남은 영상을 외장으로 옮기기 ──
+    @Rule public TemporaryFolder tmp = new TemporaryFolder();
+
+    private File makeEvent(File root, String id, String... names) throws IOException {
+        File d = new File(root, SentryStorage.eventRel(id));
+        assertTrue(d.mkdirs());
+        for (String n : names) Files.write(new File(d, n).toPath(), (id + n).getBytes(StandardCharsets.UTF_8));
+        return d;
+    }
+
+    @Test
+    public void moveEventDir_copiesVerifiesThenRemovesSourceAndEmptyParents() throws IOException {
+        File internal = tmp.newFolder("internal"), sd = tmp.newFolder("sd");
+        String id = "2026-10-09_20h50m58s";
+        File src = makeEvent(internal, id, "meta.json", "000.mp4", "thumb.jpg");
+        long bytes = SentryStorage.moveEventDir(src, sd, SentryStorage.eventRel(id));
+        File dest = new File(sd, SentryStorage.eventRel(id));
+        assertTrue(dest.isDirectory());
+        assertEquals((id + "meta.json").length() + (id + "000.mp4").length() + (id + "thumb.jpg").length(), bytes);
+        assertEquals(id + "000.mp4", new String(Files.readAllBytes(new File(dest, "000.mp4").toPath()), StandardCharsets.UTF_8));
+        assertFalse("원본은 지워진다", src.exists());
+        assertFalse("비게 된 날짜 폴더도 정리", new File(internal, "2026-10").exists());
+        assertTrue("루트는 남는다", internal.isDirectory());
+        assertFalse(new File(dest.getParentFile(), id + ".moving").exists());
+    }
+
+    @Test
+    public void moveEventDir_refusesWhenDestinationAlreadyHasIt_andKeepsSource() throws IOException {
+        File internal = tmp.newFolder("internal2"), sd = tmp.newFolder("sd2");
+        String id = "2026-10-09_20h50m58s";
+        File src = makeEvent(internal, id, "meta.json");
+        makeEvent(sd, id, "meta.json");
+        try {
+            SentryStorage.moveEventDir(src, sd, SentryStorage.eventRel(id));
+            org.junit.Assert.fail("대상에 이미 있으면 실패해야 한다");
+        } catch (IOException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("이미 있음"));
+        }
+        assertTrue("원본 유지", new File(src, "meta.json").isFile());
+    }
+
+    @Test
+    public void moveEventDir_replacesLeftoverMovingFolderFromAnInterruptedRun() throws IOException {
+        File internal = tmp.newFolder("internal3"), sd = tmp.newFolder("sd3");
+        String id = "2026-10-09_20h50m58s";
+        File src = makeEvent(internal, id, "meta.json");
+        File dest = new File(sd, SentryStorage.eventRel(id));
+        File stale = new File(dest.getParentFile(), id + ".moving");
+        assertTrue(stale.mkdirs());
+        Files.write(new File(stale, "garbage").toPath(), "x".getBytes(StandardCharsets.UTF_8));
+        SentryStorage.moveEventDir(src, sd, SentryStorage.eventRel(id));
+        assertTrue(new File(dest, "meta.json").isFile());
+        assertFalse("옛 임시 폴더의 찌꺼기가 섞이지 않는다", new File(dest, "garbage").exists());
+        assertFalse(stale.exists());
+    }
+
+    @Test
+    public void moveEventDir_failureLeavesSourceIntactAndNoTempFolder() throws IOException {
+        File internal = tmp.newFolder("internal4"), sd = tmp.newFolder("sd4");
+        String id = "2026-10-09_20h50m58s";
+        File src = makeEvent(internal, id, "meta.json", "000.mp4");
+        File bad = new File(src, "000.mp4");
+        org.junit.Assume.assumeTrue("읽기 금지가 통하는 환경만(root 제외)", bad.setReadable(false) && !bad.canRead());
+        try {
+            SentryStorage.moveEventDir(src, sd, SentryStorage.eventRel(id));
+            org.junit.Assert.fail("읽을 수 없는 파일이 있으면 실패해야 한다");
+        } catch (IOException expected) {
+            // 기대한 실패
+        } finally {
+            bad.setReadable(true);
+        }
+        assertTrue("원본 그대로", new File(src, "meta.json").isFile() && new File(src, "000.mp4").isFile());
+        File dest = new File(sd, SentryStorage.eventRel(id));
+        assertFalse("대상에 반쪽이 남지 않는다", dest.exists());
+        assertFalse("임시 폴더도 치운다", new File(dest.getParentFile(), id + ".moving").exists());
+    }
+
+    @Test
+    public void cleanMovingLeftovers_removesOnlyOldOnes() throws IOException {
+        File root = tmp.newFolder("root5");
+        File oldDir = new File(root, "2026-10/09/2026-10-09_20h50m58s.moving");
+        File newDir = new File(root, "2026-10/09/2026-10-09_21h00m00s.moving");
+        File real = makeEvent(root, "2026-10-09_22h00m00s", "meta.json");
+        assertTrue(oldDir.mkdirs() && newDir.mkdirs());
+        File f = new File(oldDir, "a");
+        Files.write(f.toPath(), "x".getBytes(StandardCharsets.UTF_8));
+        long old = System.currentTimeMillis() - 7200_000L;
+        assertTrue(f.setLastModified(old) && oldDir.setLastModified(old));
+        assertEquals(1, SentryStorage.cleanMovingLeftovers(root, 3600_000L));
+        assertFalse(oldDir.exists());
+        assertTrue("방금 만든 임시 폴더는 둔다", newDir.exists());
+        assertTrue("진짜 이벤트는 건드리지 않는다", real.isDirectory());
+    }
+
+    @Test
+    public void lastModifiedTree_returnsNewestFileTime() throws IOException {
+        File d = tmp.newFolder("d6");
+        File a = new File(d, "a"), b = new File(d, "b");
+        Files.write(a.toPath(), "1".getBytes(StandardCharsets.UTF_8));
+        Files.write(b.toPath(), "2".getBytes(StandardCharsets.UTF_8));
+        assertTrue(a.setLastModified(1_000_000_000_000L));
+        assertTrue(b.setLastModified(1_700_000_000_000L));
+        assertTrue(d.setLastModified(1_000_000_000_000L));
+        assertEquals(1_700_000_000_000L, SentryStorage.lastModifiedTree(d));
     }
 }

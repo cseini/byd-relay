@@ -33,11 +33,11 @@ final class HuAssistOverlay {
         final byte[] nv; final int w, h; final long seq, ts = System.currentTimeMillis();
         Nv(byte[] nv, int w, int h, long seq) { this.nv = nv; this.w = w; this.h = h; this.seq = seq; }
     }
-    /** ★733 창 크기 보정표 묶음 — 칸(왼쪽부터)·내용 안 칸 x·내용 크기·버퍼 크기. key가 같으면 다시 안 만든다. */
+    /** ★733 창 크기 보정표 묶음 — 칸·내용 안 칸 x·y(★815 세로로 붙이면 y가 다름)·내용 크기·버퍼 크기. key가 같으면 다시 안 만든다. */
     static final class Layout {
-        final String key; final com.cseini.motiondetect.ViewWarp[] warps; final int[] xs; final int cw, ch, bufW, bufH;
-        Layout(String key, com.cseini.motiondetect.ViewWarp[] warps, int[] xs, int cw, int ch, int bufW, int bufH) {
-            this.key = key; this.warps = warps; this.xs = xs; this.cw = cw; this.ch = ch; this.bufW = bufW; this.bufH = bufH;
+        final String key; final com.cseini.motiondetect.ViewWarp[] warps; final int[] xs, ys; final int cw, ch, bufW, bufH;
+        Layout(String key, com.cseini.motiondetect.ViewWarp[] warps, int[] xs, int[] ys, int cw, int ch, int bufW, int bufH) {
+            this.key = key; this.warps = warps; this.xs = xs; this.ys = ys; this.cw = cw; this.ch = ch; this.bufW = bufW; this.bufH = bufH;
         }
         void close() { for (com.cseini.motiondetect.ViewWarp w : warps) if (w != null) w.close(); }
     }
@@ -60,7 +60,7 @@ final class HuAssistOverlay {
     private FrameLayout root;
     private SurfaceView sv;
     private ImageView img;
-    private TextView label, hint;
+    private TextView label, label2, hint;
     private WindowManager.LayoutParams lp;
     private volatile int shownSide = 0;          // 지금 떠 있는 창(0=없음)
     private volatile int dismissedSide = 0;      // ✕로 닫은 상황 — 표시가 0이 될 때까지 다시 안 띄움
@@ -83,7 +83,7 @@ final class HuAssistOverlay {
     private final Object hdLock = new Object();
     private volatile boolean svReady = false, hdBroken = false;
     private int curBufW, curBufH;                                   // hdExec 전용
-    private final Layout[] cache = new Layout[85];                  // hdExec 전용(방향별 — ★748 82·84=후진 D 왼쪽·오른쪽 따로 창)
+    private final Layout[] cache = new Layout[87];                  // hdExec 전용(방향별 — ★748 82·84=후진 D 왼쪽·오른쪽 따로 창, ★815 85=가로·86=세로로 붙인 한 창)
     private long layoutRetryAt;                                     // hdExec 전용 — 보정표 실패 뒤 1초 쉬기
 
     HuAssistOverlay(Context ctx, SharedPreferences prefs, FrameSource src, Log log) {
@@ -97,8 +97,20 @@ final class HuAssistOverlay {
     boolean wants(int side) {
         if (prefs == null) return false;
         if (side == 2 || side == 4) return prefs.getBoolean("hu_assist_turn", false);
-        if (side == 8 || side == 82 || side == 84) return prefs.getBoolean("hu_assist_rev", false);   // ★748 82·84=후진 D 좌·우 따로 창
+        if (side == 8 || side == 82 || side == 84 || combined(side)) return prefs.getBoolean("hu_assist_rev", false);   // ★748 82·84=후진 D 좌·우 따로 창
         return false;
+    }
+
+    /** ★815 후진 D 왼쪽·오른쪽을 한 창에 붙여 보이는 창(85=가로 · 86=세로, 왼쪽이 위). */
+    private static boolean combined(int side) { return side == 85 || side == 86; }
+
+    /** ★815 지금 고른 후진 배치(0=따로 창 82·84 · 1=가로 85 · 2=세로 86)에서 쓰는 창인가 — 안 쓰는 배치의 보정표는 미리 만들지 않는다. */
+    private boolean arrActive(int side) {
+        int arr = prefs == null ? 0 : Math.max(0, Math.min(2, prefs.getInt("hu_rev_arr", 0)));
+        if (side == 82 || side == 84) return arr == 0;
+        if (side == 85) return arr == 1;
+        if (side == 86) return arr == 2;
+        return true;
     }
 
     // ★732 신호가 끝나고 닫기까지 — 깜빡이 끈 직후·P↔R 사이 깜빡임 방지. ★739 폰에서 0~3초(0.1초 단위)로 설정(운영자 10-04), 기본 1초.
@@ -121,7 +133,7 @@ final class HuAssistOverlay {
 
     /** 폰 '헤드유닛에서 위치·크기 조정' — 그 창을 빈 화면으로 60초 띄운다. */
     void adjust(int side) {
-        if (side != 2 && side != 4 && side != 8 && side != 82 && side != 84) return;
+        if (side != 2 && side != 4 && side != 8 && side != 82 && side != 84 && !combined(side)) return;
         adjusting = true;
         main.removeCallbacks(hideR); main.removeCallbacks(adjustEndR);
         main.post(() -> { hideNow(); showNow(side); });
@@ -139,15 +151,15 @@ final class HuAssistOverlay {
     void prewarm(int fw, int fh) {
         if (hdBroken) return;
         hdExec.execute(() -> {
-            for (int sd : new int[]{2, 4, 8, 82, 84}) {
-                if (!wants(sd)) continue;
+            for (int sd : new int[]{2, 4, 8, 82, 84, 85, 86}) {
+                if (!wants(sd) || !arrActive(sd)) continue;
                 int[] r = rectOf(sd), b = capBuf(r[2], r[3]);
                 layoutFor(sd, fw, fh, b[0], b[1]);
             }
         });
     }
 
-    private static String nameOf(int side) { return side == 2 ? "◀ 왼쪽" : side == 4 ? "오른쪽 ▶" : side == 82 ? "◀ 왼쪽(후진)" : side == 84 ? "오른쪽 ▶(후진)" : "후진"; }
+    private static String nameOf(int side) { return side == 2 ? "◀ 왼쪽" : side == 4 ? "오른쪽 ▶" : side == 82 ? "◀ 왼쪽(후진)" : side == 84 ? "오른쪽 ▶(후진)" : side == 85 ? "후진 가로" : side == 86 ? "후진 세로" : "후진"; }
 
     private int dp(float v) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, ctx.getResources().getDisplayMetrics()); }
 
@@ -162,7 +174,8 @@ final class HuAssistOverlay {
         }
         if (r == null) {
             if (side == 82 || side == 84) { int w = (int) (sw * 0.2f), h = (int) (sh * 0.42f), x = side == 82 ? (int) (sw * 0.01f) : sw - w - (int) (sw * 0.01f); r = new int[]{x, (sh - h) / 2, w, h}; }   // ★748 후진 D 따로 창 — 처음엔 화면 양끝(운영자가 순정 후방 영상 양옆 등으로 옮김)
-            else if (side == 8) { int w = (int) (sw * 0.62f), h = (int) (w / 2.15f); r = new int[]{(sw - w) / 2, sh - h - (int) (sh * 0.05f), w, h}; }
+            else if (side == 8 || side == 85) { int w = (int) (sw * 0.62f), h = (int) (w / 2.15f); r = new int[]{(sw - w) / 2, sh - h - (int) (sh * 0.05f), w, h}; }
+            else if (side == 86) { int w = (int) (sw * 0.2f), h = (int) (w * 1.9f), x = (int) (sw * 0.01f); r = new int[]{x, (sh - h) / 2, w, h}; }   // ★815 세로로 붙인 한 창 — 처음엔 화면 왼쪽 가운데(왼쪽 칸이 위·오른쪽 칸이 아래)
             else { int w = (int) (sw * 0.34f), h = (int) (w / 1.44f), x = side == 2 ? (int) (sw * 0.02f) : sw - w - (int) (sw * 0.02f); r = new int[]{x, sh - h - (int) (sh * 0.05f), w, h}; }
         }
         return clamp(r, sw, sh);
@@ -217,6 +230,11 @@ final class HuAssistOverlay {
         label.setTextColor(Color.WHITE); label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         label.setBackgroundColor(0x99000000); label.setPadding(dp(10), dp(4), dp(10), dp(4));
         root.addView(label, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START));
+        label2 = new TextView(ctx);   // ★815 한 창에 붙여 보일 때 둘째 칸(오른쪽) 이름표
+        label2.setTextColor(Color.WHITE); label2.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        label2.setBackgroundColor(0x99000000); label2.setPadding(dp(10), dp(4), dp(10), dp(4));
+        label2.setVisibility(View.GONE);
+        root.addView(label2, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START));
         TextView close = new TextView(ctx);
         close.setText("✕"); close.setTextColor(Color.WHITE); close.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20); close.setGravity(Gravity.CENTER);
         close.setBackgroundColor(0x99000000);
@@ -238,6 +256,7 @@ final class HuAssistOverlay {
                         int[] r = clamp(new int[]{lp.x, lp.y, w0 + (int) (e.getRawX() - sx), h0 + (int) (e.getRawY() - sy)}, dm.widthPixels, dm.heightPixels);
                         lp.width = r[2]; lp.height = r[3];
                         wantW = r[2]; wantH = r[3]; wantAt = System.currentTimeMillis();
+                        placeLabel2();
                         try { wm.updateViewLayout(root, lp); } catch (Throwable ignored) {}
                         return true;
                     }
@@ -294,7 +313,9 @@ final class HuAssistOverlay {
         boolean quiet = !adjusting && !hdBroken;
         setVisible(!quiet);
         shownSide = side;
-        label.setText(nameOf(side));
+        label.setText(combined(side) && !adjusting ? nameOf(2) : nameOf(side));
+        label2.setText(nameOf(4));
+        placeLabel2();
         hint.setText(adjusting ? "위치·크기 조정 — 창을 끌어 옮기고 오른쪽 아래 ◢로 크기를 바꾸세요\n(" + nameOf(side) + " 창 · 60초 뒤 닫힘, ✕로 끝내기)" : "카메라 연결 중…");
         hint.setVisibility(View.VISIBLE);
         img.setImageBitmap(null);
@@ -308,6 +329,17 @@ final class HuAssistOverlay {
         main.removeCallbacks(revealR);
         if (quiet) main.postDelayed(revealR, 300);
         if (hdBroken) startPump(); else startHd();
+    }
+    // 메인 스레드 — ★815 한 창에 붙여 보이는 배치면 둘째 이름표를 둘째 칸 왼쪽 위에 놓는다(창 크기가 바뀔 때마다). 조정 창은 이름표 하나만.
+    private void placeLabel2() {
+        if (label2 == null || lp == null) return;
+        boolean on = combined(shownSide) && !adjusting;
+        label2.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (!on) return;
+        FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) label2.getLayoutParams();
+        p.leftMargin = shownSide == 85 ? lp.width / 2 + dp(2) : 0;
+        p.topMargin = shownSide == 86 ? lp.height / 2 + dp(2) : 0;
+        label2.setLayoutParams(p);
     }
     private WindowManager.LayoutParams newLp(int[] r) {
         int type = android.os.Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_PHONE;
@@ -388,7 +420,7 @@ final class HuAssistOverlay {
                 continue;
             }
             int rc;
-            synchronized (hdLock) { rc = svReady ? hd.render(f.nv, f.w, f.h, L.warps, L.xs, L.cw, L.ch, L.bufW, L.bufH) : -1; if (rc == 0) drawn = true; }
+            synchronized (hdLock) { rc = svReady ? hd.render(f.nv, f.w, f.h, L.warps, L.xs, L.ys, L.cw, L.ch, L.bufW, L.bufH) : -1; if (rc == 0) drawn = true; }
             long ms = System.currentTimeMillis() - now;
             if (rc != 0) {
                 if (rc == -3) cache[shownSide] = closeAndNull(cache[shownSide]);
@@ -464,7 +496,7 @@ final class HuAssistOverlay {
                 if (g != pumpGen) break;
                 long now = System.currentTimeMillis();
                 if (f != null) seq = f.seq;
-                int want = shownSide == 82 || shownSide == 84 ? 8 : shownSide;   // ★748 따로 창은 폰 JPEG(후진 D 나란히)를 그대로 — 직접 그리기 안 되는 기기에서만
+                int want = shownSide == 82 || shownSide == 84 || combined(shownSide) ? 8 : shownSide;   // ★748 따로 창은 폰 JPEG(후진 D 나란히)를 그대로(★815 붙인 창도 가로 그대로) — 직접 그리기 안 되는 기기에서만
                 if (f == null || (f.side != 0 && f.side != want) || now - f.ts > 500) {   // 다른 방향·지난 신호 때 화면은 건너뜀
                     if (!stale && !ending && (n > 0 ? now - Math.max(lastAt, resumeAt) > 1000 : now - t0 > 3000)) {
                         stale = true;
