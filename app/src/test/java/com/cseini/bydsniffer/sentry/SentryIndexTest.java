@@ -269,4 +269,14 @@ public class SentryIndexTest {
         SentryIndex.sortSegmentsByN(list);
         for (int k = 0; k < list.size(); k++) assertEquals(k, list.get(k).n);
     }
+
+    @Test
+    public void rev_changesWhenListChangesAndLooksLikeBootDotCounter() {
+        String r0 = SentryIndex.rev();
+        assertTrue(r0, r0.matches("[0-9a-z]+\\.[0-9]+"));
+        SentryIndex.bumpRev();
+        String r1 = SentryIndex.rev();
+        assertTrue(!r0.equals(r1));
+        assertEquals(r1, SentryIndex.rev());   // 바뀌지 않으면 같은 값
+    }
 }

@@ -85,7 +85,7 @@ html{color-scheme:dark;height:100%}body{margin:0;height:100%;background:var(--bg
     <button class="fs" id="fs" type="button" title="전체화면" aria-label="전체화면">⛶</button>
     <button class="done" id="done" hidden>완료</button>
   </div>
-  <div class="guide" id="guide"><div class="card"><b>전체화면으로 쓰기</b>아이폰 사파리는 페이지 전체화면을 막아 두어서, 홈 화면에 추가해 열면 주소창 없이 앱처럼 뜹니다.<ol><li>아래 <b>공유</b> 버튼(네모에 화살표)을 누르고</li><li><b>홈 화면에 추가</b>를 선택한 뒤</li><li>홈 화면의 <b>링크락 리모컨</b> 아이콘으로 여세요</li></ol><button type="button" id="guide-ok">알겠어요</button></div></div>
+  <div class="guide" id="guide"><div class="card"><b>전체화면으로 쓰기</b>아이폰 사파리는 페이지 전체화면을 막아 두어서, 홈 화면에 추가해 열면 주소창 없이 앱처럼 뜹니다.<ol><li>아래 <b>공유</b> 버튼(네모에 화살표)을 누르고</li><li><b>홈 화면에 추가</b>를 선택한 뒤</li><li>홈 화면의 <b>링크락 리모컨</b> 아이콘으로 여세요</li></ol><div style="margin-top:12px;font-size:10px;opacity:.5">오픈소스(AGPL-3.0) · github.com/cseini/byd-relay</div><button type="button" id="guide-ok">알겠어요</button></div></div>
   <div class="pages" id="pages">
     <div class="page" id="pg-car"><div class="grid" id="grid-car"></div><div class="tray" id="tray-car"></div></div>
     <div class="page" id="pg-app"><div class="modes" id="modes"></div><div class="grid" id="grid-app"></div><div class="tray" id="tray-app"></div></div>
@@ -336,5 +336,4 @@ var Mirror=(function(){
 refresh();setInterval(refresh,2000);
 })();
 </script>
-<p style="margin:14px 16px 10px;font-size:11px;opacity:.55;color:#8A93A2">이 앱은 오픈소스(AGPL-3.0)입니다 · 소스 코드: <a href="https://github.com/cseini/byd-relay" style="color:inherit">https://github.com/cseini/byd-relay</a></p>
 </body></html>

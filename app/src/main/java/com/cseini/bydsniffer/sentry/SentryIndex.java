@@ -171,6 +171,13 @@ public final class SentryIndex {
         return id != null && ID.matcher(id).matches();
     }
 
+    // 목록 변경 번호 — 이벤트가 생기거나(쓰기)·지워지거나·즐겨찾기가 바뀔 때마다 오른다. 앱이 목록을 캐시해 두고 이 값이 같으면 다시 조회하지 않게 한다.
+    // 릴레이가 재시작돼도 옛 값과 겹치지 않게 시작 시각(36진수 초)을 앞에 붙인다 — 값은 문자열로 같은지만 비교하면 된다(예: "t8x2k1.57")
+    private static final String REV_BOOT = Long.toString(System.currentTimeMillis() / 1000L, 36);
+    private static final java.util.concurrent.atomic.AtomicLong REV = new java.util.concurrent.atomic.AtomicLong();
+    public static void bumpRev() { REV.incrementAndGet(); }
+    public static String rev() { return REV_BOOT + "." + REV.get(); }
+
     public void write(EventMeta m) {
         File dir = eventDir(m.id);
         if (!dir.isDirectory() && !dir.mkdirs()) {
@@ -179,6 +186,7 @@ public final class SentryIndex {
         synchronized (META_LOCK) {
             try {
                 writeAtomic(new File(dir, META), m.toJson().toString().getBytes("UTF-8"));
+                bumpRev();
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -299,6 +307,7 @@ public final class SentryIndex {
         if (!dir.exists()) return false;
         deleteRecursive(dir);
         if (dir.exists()) return false;
+        bumpRev();
         // 비게 된 날짜·월 폴더 정리
         File day = dir.getParentFile();
         if (day != null && day.list() != null && day.list().length == 0 && day.delete()) {

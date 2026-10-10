@@ -258,4 +258,37 @@ public class SentryManagerTest {
         assertEquals(900_000L, SentryManager.armBackoffMs(5));
         assertEquals(900_000L, SentryManager.armBackoffMs(50));
     }
+
+    @Test
+    public void spaceLevel_warnsAt80And95AndStopsAtLimitOrLowDeviceSpace() {
+        assertEquals(0, SentryManager.spaceLevel(1000, 3000, 20_000));
+        assertEquals(0, SentryManager.spaceLevel(2399, 3000, 20_000));
+        assertEquals(1, SentryManager.spaceLevel(2400, 3000, 20_000));   // 80%
+        assertEquals(1, SentryManager.spaceLevel(2849, 3000, 20_000));
+        assertEquals(2, SentryManager.spaceLevel(2850, 3000, 20_000));   // 95%
+        assertEquals(3, SentryManager.spaceLevel(3000, 3000, 20_000));   // 한도 도달 = 가득
+        assertEquals(3, SentryManager.spaceLevel(3500, 3000, 20_000));
+        assertEquals(3, SentryManager.spaceLevel(100, 3000, 499));       // 기기 여유 500MB 미만 = 가득
+        assertEquals(0, SentryManager.spaceLevel(100, 0, 20_000));       // 한도를 모르면 판단하지 않는다
+        assertEquals("ok", SentryManager.spaceStateName(0));
+        assertEquals("warn", SentryManager.spaceStateName(1));
+        assertEquals("critical", SentryManager.spaceStateName(2));
+        assertEquals("full", SentryManager.spaceStateName(3));
+        assertEquals(80, SentryManager.spacePct(2400, 3000));
+        assertEquals(100, SentryManager.spacePct(9000, 3000));
+        assertEquals(0, SentryManager.spacePct(10, 0));
+    }
+
+    @Test
+    public void summary_countsOnlyEventsStartedInsideTheSessionAndNamesFitWorkerLimit() {
+        java.util.List<SentryIndex.EventMeta> all = new java.util.ArrayList<>();
+        for (long t : new long[]{1000L, 5000L, 9000L, 20000L}) { SentryIndex.EventMeta m = new SentryIndex.EventMeta(); m.startMs = t; all.add(m); }
+        assertEquals(4, SentryManager.countSince(all, 0L));
+        assertEquals(3, SentryManager.countSince(all, 5000L));   // 구간 시작 시각 이후(같은 시각 포함)
+        assertEquals(1, SentryManager.countSince(all, 20000L));
+        assertEquals(0, SentryManager.countSince(all, 20001L));
+        assertEquals("ssum:12:627", SentryManager.summaryEvent(12, 627));
+        assertEquals("ssum:3:0", SentryManager.summaryEvent(3, -5));
+        assertTrue(SentryManager.summaryEvent(999, 99999).length() <= 32);
+    }
 }
