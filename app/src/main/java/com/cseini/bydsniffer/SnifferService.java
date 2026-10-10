@@ -4982,8 +4982,21 @@ public class SnifferService extends Service {
                 org.json.JSONArray jx = r.getJSONArray("nx"), jy = r.getJSONArray("ny");
                 float[] nx = new float[jx.length()], ny = new float[jy.length()];
                 for (int k = 0; k < nx.length; k++) { nx[k] = (float) jx.getDouble(k); ny[k] = (float) jy.getDouble(k); }
-                rois.add(new com.cseini.motiondetect.Roi(r.optInt("id", i), nx, ny,
-                        (float) r.optDouble("minPct", 0.03), r.optLong("sustainMs", 300)));
+                int rid = r.optInt("id", i);
+                float minPct = (float) r.optDouble("minPct", 0.03);
+                // ★870 운영자 10-11 "영역 설정 안 하고 전체를 대상으로" 시험 — 접근(0)·작업영역(1)은 그린 영역이 있는 카메라 칸 전체에서 움직임을 보고,
+                //   사람 확인(YOLO, 가깝고 큰 사람만 ★869)이 거리를 거른다. 4분할(view 5)·주차 감지만. 끄는 스위치 det_whole_cam(기본 켬, 운영자판)
+                if (rid <= 1 && !driveMode && !sentryMode && view == 5 && BuildConfig.IS_OPERATOR && (prefs == null || prefs.getBoolean("det_whole_cam", true)) && nx.length > 0) {
+                    float cx = 0f, cy = 0f; for (int k = 0; k < nx.length; k++) { cx += nx[k]; cy += ny[k]; } cx /= nx.length; cy /= ny.length;
+                    float tx = cx < 0.5f ? 0f : 0.5f, ty = cy < 0.5f ? 0f : 0.5f;
+                    boolean dup = false;
+                    for (com.cseini.motiondetect.Roi o : rois) if (o.id == rid && o.nx.length == 4 && o.nx[0] == tx && o.ny[0] == ty) dup = true;
+                    if (dup) continue;
+                    nx = new float[]{tx, tx + 0.5f, tx + 0.5f, tx}; ny = new float[]{ty, ty, ty + 0.5f, ty + 0.5f};
+                    minPct = Math.min(minPct, 0.03f);   // 칸 전체라 같은 사람이어도 비율이 작다
+                    postToD1("CAMDETECT", "영역" + rid + " → 그 카메라 칸 전체(" + (ty == 0f ? "위" : "아래") + (tx == 0f ? "왼쪽" : "오른쪽") + ")에서 움직임·사람 확인");
+                }
+                rois.add(new com.cseini.motiondetect.Roi(rid, nx, ny, minPct, r.optLong("sustainMs", 300)));
             }
         } catch (Throwable t) { return "ROI 파싱 실패: " + t; }
         if (!sentryMode && rois.isEmpty()) return "ROI 없음";
