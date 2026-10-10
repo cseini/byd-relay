@@ -90,6 +90,14 @@ public class MainActivity extends AppCompatActivity {
         // ★센트리 녹화 보기(10-08) · ★842 공유판도 — 센트리가 도는 차(디링크3, 씨라7은 센트리 시험판만)에서 보인다. 공유판은 릴레이 K로 만든 권한 값을 붙여 연다.
         //   화면 이름으로 열어 센트리가 없는 갈래(d5 공유판)에서도 이 파일을 그대로 쓴다.
         //   ★센트리를 켠 차에서만 칸을 보인다(운영자 10-10 "센트리 안 쓰는 사람은?") — 화면에 들어올 때마다 다시 본다(onResume).
+        Button launcherBtn = findViewById(R.id.launcherButton);   // ★872
+        if (launcherBtn != null) launcherBtn.setOnClickListener(v -> {
+            SnifferService svc = SnifferService.getInstance();
+            if (svc == null) { Toast.makeText(this, "릴레이 서비스가 아직 안 떴어요", Toast.LENGTH_SHORT).show(); return; }
+            boolean to = !svc.launcherOn();
+            Toast.makeText(this, svc.launcherSet(to), Toast.LENGTH_LONG).show();
+            updateLauncherButton();
+        });
         Button sentryViewBtn = findViewById(R.id.sentryViewButton);
         if (!DiLink5Support.isDiLink5() || BuildConfig.D5_SENTRY) {
             updateSentrySection();
@@ -393,12 +401,22 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    // ★872 링크락 런처 사용 — 돌핀(디링크3)만
+    private void updateLauncherButton() {
+        android.widget.Button b = findViewById(R.id.launcherButton);
+        if (b == null) return;
+        boolean show = BuildConfig.IS_OPERATOR && !DiLink5Support.isDiLink5();   // ★872 운영자 10-11 "런처 버튼은 아직 공유판에 오픈하지 마" — 운영자판 돌핀만
+        b.setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
+        findViewById(R.id.launcherDesc).setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
+        SnifferService svc = SnifferService.getInstance();
+        b.setText("링크락 런처 사용: " + (svc != null && svc.launcherOn() ? "켜짐" : "꺼짐"));
+    }
     private void updateSentrySection() {
         SnifferService s = SnifferService.getInstance();
         boolean show = (!DiLink5Support.isDiLink5() || BuildConfig.D5_SENTRY) && s != null && s.sentryEnabled();
         findViewById(R.id.sentrySection).setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
     }
-    @Override protected void onResume() { super.onResume(); updateSentrySection(); }
+    @Override protected void onResume() { super.onResume(); updateSentrySection(); updateLauncherButton(); }
 
     // ★로그 보내기(진단) — 쌓인 릴레이 로그를 개발자(D1)에게 1회 전송. 누를 때만(데이터 부담 0). 메인 버튼 + 설정 대화상자 공용.
     private void sendDiagLogs() {

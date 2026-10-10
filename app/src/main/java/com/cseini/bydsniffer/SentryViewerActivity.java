@@ -23,6 +23,23 @@ import java.net.URL;
 public class SentryViewerActivity extends Activity {
     private WebView web;
     private TextView msg;
+    private LinearLayout bar;
+    private volatile boolean pageFs = false;   // ★866 플레이어가 전체화면 중(뒤로 가기 = 전체화면 끝)
+
+    // ★866 플레이어 전체화면 다리 — 페이지가 LLHU.fullscreen(true|false)를 부르면 위 막대와 시스템 줄을 숨기고 되살린다(이 기능만, 릴레이 로컬 페이지에서만 연다)
+    private final class FsBridge {
+        @android.webkit.JavascriptInterface
+        public void fullscreen(boolean on) {
+            runOnUiThread(() -> {
+                pageFs = on;
+                if (bar != null) bar.setVisibility(on ? View.GONE : View.VISIBLE);
+                getWindow().getDecorView().setSystemUiVisibility(on
+                        ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        : View.SYSTEM_UI_FLAG_VISIBLE);
+            });
+        }
+    }
 
     @Override
     protected void onCreate(Bundle b) {
@@ -30,7 +47,7 @@ public class SentryViewerActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.BLACK);
-        LinearLayout bar = new LinearLayout(this);
+        bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setBackgroundColor(Color.parseColor("#151d26"));
@@ -59,6 +76,7 @@ public class SentryViewerActivity extends Activity {
         web.setBackgroundColor(Color.BLACK);
         web.setWebViewClient(new WebViewClient());
         web.setWebChromeClient(new WebChromeClient());
+        web.addJavascriptInterface(new FsBridge(), "LLHU");
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
         findPortAndLoad();
@@ -96,6 +114,7 @@ public class SentryViewerActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (pageFs && web != null) { web.evaluateJavascript("window.exitFs&&exitFs()", null); return; }   // ★866 전체화면이면 먼저 빠져나온다
         if (web != null && web.canGoBack()) web.goBack();
         else super.onBackPressed();
     }

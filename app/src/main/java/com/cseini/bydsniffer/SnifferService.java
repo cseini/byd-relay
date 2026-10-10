@@ -2291,6 +2291,7 @@ public class SnifferService extends Service {
             // ★654 시동 OFF 순간 저장장치 관찰 시작(sd_off_ts는 동기 저장 — D5는 몇 초 뒤 강제종료되므로 +0분은 즉시 찍고 나머지는 앵커루프가 이어감)
             RelayClient.netGapLog = m -> postToD1("NETGAP", m);   // ★726 서버 끊김이 잠 때문인지 인터넷·서버 때문인지 한 줄
             relay.onIgnitionOff = () -> {
+                mainHandler.postDelayed(this::launcherUpdateCheck, 60000);   // ★872 링크락 런처 새 판(켜 둔 경우만, 시동 끈 1분 뒤)
                 SentryManager.get().onIgnition(false);   // ★센트리 — OFF +20초에 게이트 평가(앞 문장이 예외를 던져도 불리도록 첫 줄)
                 setSplitOwned(false);   // ★724 시동 끄면 이번에 띄운 분할 기억도 끝
                 if (prefs != null) prefs.edit().putLong("sd_off_ts", System.currentTimeMillis()).putInt("sd_done", 0).apply();
@@ -9300,10 +9301,11 @@ public class SnifferService extends Service {
         d5Slot = new int[]{prefs.getInt("d5_slot_rear", 2) & 3, prefs.getInt("d5_slot_left", 3) & 3, prefs.getInt("d5_slot_right", 1) & 3};
     }
     private static int[] tileRect(int w, int h, int side) {
-        if (w >= 4 * h) { int tw = w / 4; int idx = side == 8 ? 0 : side == 2 ? 1 : 2; return new int[]{idx * tw, 0, tw, h}; }
+        // ★871 side 1=전방(링크락 런처 카메라 띠) — 후·좌·우가 아닌 남은 한 칸(실차 확인 필요)
+        if (w >= 4 * h) { int tw = w / 4; int idx = side == 8 ? 0 : side == 2 ? 1 : side == 1 ? 3 : 2; return new int[]{idx * tw, 0, tw, h}; }
         int qw = w / 2, qh = h / 2;
-        if (IS_D5) { int[] s = d5Slot; int slot = side == 8 ? s[0] : side == 2 ? s[1] : s[2]; return new int[]{(slot & 1) * qw, (slot >> 1) * qh, qw, qh}; }   // ★745
-        return new int[]{side == 2 ? qw : 0, side == 4 ? qh : 0, qw, qh};
+        if (IS_D5) { int[] s = d5Slot; int slot = side == 8 ? s[0] : side == 2 ? s[1] : side == 1 ? 6 - s[0] - s[1] - s[2] : s[2]; return new int[]{(slot & 1) * qw, (slot >> 1) * qh, qw, qh}; }   // ★745
+        return new int[]{side == 2 || side == 1 ? qw : 0, side == 4 || side == 1 ? qh : 0, qw, qh};
     }
     private byte[] encodeQuadrant(byte[] nv21, int w, int h, int side, int scale, int q) {
         try {
@@ -10239,9 +10241,127 @@ public class SnifferService extends Service {
             if ("CLUSTERCFG".equals(action)) return clusterLayoutCfg(params);   // ★619 클러스터 레이아웃(위젯·테마·칩) 릴레이 저장 — 클러스터 페이지 LAN 저장
             if ("CLUSTERCAM".equals(action)) return clusterCamCfg(params);      // ★619 클러스터 안 '카메라 화면 조정' LAN 적용
             if ("HUASSIST".equals(action)) return huAssistCmd(params);          // ★728 헤드유닛 카메라 창 설정·위치 조정(폰 직결 경로)
-            if ("MOUSE".equals(action)) return MouseInjector.handle(this, params);   // ★601 공유판 개방(운영자 09-27 "다 오픈하고 피드백 받아 수정") — 씨라7 등 uinput 미검증 차종은 A1 TRACKPAD 로그로 확인
+            if ("MOUSE".equals(action)) return MouseInjector.handle(this, params);
+            // ★871 링크락 런처 요청(운영자 10-11) — 순정 홈 되돌리기(탈출 버튼, 게이트 없음)·공조 전원 켜고 끄기·비상등(클라우드)
+            if ("RESTOREHOME".equals(action)) return restoreStockHome();
+            if ("CLIMATE".equals(action)) {
+                Object cur = relay != null ? relay.getStatus("ac_start_st") : null;
+                int v = params != null && params.has("on") ? (params.optBoolean("on") ? 1 : 0) : ((cur instanceof Integer && (Integer) cur == 1) ? 0 : 1);
+                String r = execRelayAction("RAW", new org.json.JSONObject().put("device", "ac").put("baseFeature", "AC_POWER_STATE_SET").put("value", v));
+                postToD1("LAUNCHER", "공조 " + (v == 1 ? "켜기" : "끄기") + " → " + (r == null ? "OK" : r));
+                return r == null ? "공조 " + (v == 1 ? "켬" : "끔") : "공조 실패 " + r;
+            }
+            if ("HAZARD".equals(action)) { String r = cloudFlash(); postToD1("LAUNCHER", "비상등 → " + r); return r; }   // ★601 공유판 개방(운영자 09-27 "다 오픈하고 피드백 받아 수정") — 씨라7 등 uinput 미검증 차종은 A1 TRACKPAD 로그로 확인
             return "웹에서 허용되지 않는 명령: " + action;
         } catch (Throwable t) { return "실패 " + t.getClass().getSimpleName() + ":" + t.getMessage(); }
+    }
+    // ★872 '링크락 런처 사용' 배포 스위치(운영자 10-11, 런처 세션 요청 A0) — 켜면 A1에서 런처를 받아 해시 확인 뒤 셸로 설치하고 헤드유닛 홈으로 지정,
+    //   끄면 홈을 순정으로 되돌리고 지운 뒤 우리가 바꾼 시스템 설정만 원래 값으로 되돌린다([[설정 원복 원칙]]). 설치·제거·업데이트는 P단 주차(또는 시동 꺼짐) 중에만.
+    //   APK는 앱에 넣지 않고 서버에서 받는다(FB2011). 운영자판 먼저.
+    static final String LAUNCHER_PKG = "com.cseini.linklock";
+    private final java.util.concurrent.atomic.AtomicBoolean launcherBusy = new java.util.concurrent.atomic.AtomicBoolean(false);
+    public boolean launcherOn() { return prefs != null && prefs.getBoolean("launcher_on", false); }
+    private boolean launcherParked() { return lastGearVal == 3 || (relay != null && relay.ignitionState() != 1); }
+    private int installedLauncherVer() {
+        try { return getPackageManager().getPackageInfo(LAUNCHER_PKG, 0).versionCode; } catch (Throwable t) { return -1; }
+    }
+    /** 화면 버튼에서 부른다 — 바로 돌아오고 결과는 토스트·로그로 */
+    public String launcherSet(boolean on) {
+        if (!launcherParked()) return "P단에 두거나 시동을 끈 뒤에 바꿀 수 있어요";
+        if (!launcherBusy.compareAndSet(false, true)) return "이미 처리 중이에요";
+        if (prefs != null) prefs.edit().putBoolean("launcher_on", on).apply();
+        new Thread(() -> {
+            String r;
+            try { r = on ? launcherInstallOrUpdate(true) : launcherRemove(); }
+            catch (Throwable t) { r = "실패 " + t.getClass().getSimpleName() + ":" + t.getMessage(); }
+            finally { launcherBusy.set(false); }
+            if (on && (r == null || !(r.contains(" 설치") || r.contains("그대로"))) && prefs != null) prefs.edit().putBoolean("launcher_on", false).apply();   // 못 깔았으면 스위치도 꺼 둔다
+            postToD1("LAUNCHER", (on ? "켜기" : "끄기") + " → " + r);
+            final String msg = r;
+            mainHandler.post(() -> android.widget.Toast.makeText(getApplicationContext(), "링크락 런처 — " + msg, android.widget.Toast.LENGTH_LONG).show());
+        }, "launcher-set").start();
+        return on ? "링크락 런처를 받아 설치하는 중이에요" : "순정 홈으로 되돌리는 중이에요";
+    }
+    /** 시동을 끌 때마다(켜 둔 경우만) 새 판이 있으면 올린다 */
+    private void launcherUpdateCheck() {
+        if (!launcherOn() || !launcherParked() || !launcherBusy.compareAndSet(false, true)) return;
+        new Thread(() -> {
+            try { String r = launcherInstallOrUpdate(false); if (r != null) postToD1("LAUNCHER", "업데이트 확인 → " + r); }
+            catch (Throwable t) { postToD1("LAUNCHER", "업데이트 확인 실패 " + t.getClass().getSimpleName()); }
+            finally { launcherBusy.set(false); }
+        }, "launcher-update").start();
+    }
+    /** force=true면 이미 최신이어도 홈 지정까지 다시. 할 일이 없으면 null */
+    private String launcherInstallOrUpdate(boolean force) throws Exception {
+        org.json.JSONObject meta;
+        java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL("https://byd.cseini.co.kr/lllauncher.json").openConnection();
+        c.setConnectTimeout(10000); c.setReadTimeout(20000);
+        try (java.io.InputStream in = c.getInputStream()) { meta = new org.json.JSONObject(new String(readAll(in), "UTF-8")); }
+        if (!meta.optBoolean("ok")) return "서버에 런처 판이 없어요";
+        int ver = meta.optInt("ver"), have = installedLauncherVer();
+        String sha = meta.optString("sha256");
+        if (have >= ver && !force) return null;
+        if (have < ver) {
+            java.io.File apk = new java.io.File(getExternalFilesDir(null), "lllauncher.apk");
+            java.net.HttpURLConnection d = (java.net.HttpURLConnection) new java.net.URL("https://byd.cseini.co.kr" + meta.optString("url")).openConnection();
+            d.setConnectTimeout(10000); d.setReadTimeout(90000);
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            try (java.io.InputStream in = d.getInputStream(); java.io.FileOutputStream fo = new java.io.FileOutputStream(apk)) {
+                byte[] buf = new byte[8192]; int n; while ((n = in.read(buf)) > 0) { fo.write(buf, 0, n); md.update(buf, 0, n); }
+            }
+            StringBuilder hx = new StringBuilder(); for (byte x : md.digest()) hx.append(String.format("%02x", x));
+            if (!hx.toString().equalsIgnoreCase(sha)) { apk.delete(); return "받은 파일 해시가 달라 설치 안 함"; }
+            java.io.File pk = new java.io.File(getFilesDir(), "adbkey"), pub = new java.io.File(getFilesDir(), "adbkey.pub");
+            if (!pk.exists() || !pub.exists()) return "셸 연결 키 없음(ADB_AUTH 먼저)";
+            dadb.Dadb dd = dadb.Dadb.Companion.create("127.0.0.1", 5555, dadb.AdbKeyPair.Companion.read(pk, pub), 10000, 120000);
+            try {
+                String remote = "/data/local/tmp/lllauncher.apk";
+                dd.push(apk, remote, 420, System.currentTimeMillis());
+                dadb.AdbShellResponse ir = dd.shell("pm install -r -g " + remote + " 2>&1; rm -f " + remote);
+                String out = ir.getAllOutput() == null ? "" : ir.getAllOutput().trim();
+                if (!out.contains("Success")) return "설치 실패 " + (out.length() > 120 ? out.substring(0, 120) : out);
+            } finally { try { dd.close(); } catch (Throwable ignored) {} apk.delete(); }
+        }
+        // 우리가 바꾸기 전 값을 한 번만 적어 둔다(끌 때 그대로 되돌림, 없던 값은 지움)
+        if (prefs != null && !prefs.contains("launcher_orig_freeform")) {
+            prefs.edit().putString("launcher_orig_freeform", SplitLauncher.adb(this, "settings get global enable_freeform_support").out.trim())
+                    .putString("launcher_orig_resizable", SplitLauncher.adb(this, "settings get global force_resizable_activities").out.trim()).apply();
+        }
+        SplitLauncher.adb(this, "settings put global enable_freeform_support 1");
+        SplitLauncher.adb(this, "settings put global force_resizable_activities 1");
+        SplitLauncher.Res role = SplitLauncher.adb(this, "cmd role add-role-holder android.app.role.HOME " + LAUNCHER_PKG + " 2>&1");
+        SplitLauncher.adb(this, "input keyevent 3");
+        int now = installedLauncherVer();
+        if (relay != null) relay.putStatus("launcher", now > 0 ? (launcherOn() ? "on:" : "off:") + now : "none");
+        return (have < ver ? "판 " + ver + " 설치" : "판 " + now + " 그대로") + (role.ok ? " · 홈 지정" : " · 홈 지정 실패(" + role.exit + ")")
+                + (have < 0 ? " · 자유 창은 헤드유닛을 한 번 껐다 켠 뒤부터" : "");
+    }
+    private String launcherRemove() {
+        String home = restoreStockHome();
+        SplitLauncher.Res un = SplitLauncher.adb(this, "pm uninstall " + LAUNCHER_PKG + " 2>&1");
+        if (prefs != null && prefs.contains("launcher_orig_freeform")) {
+            for (String[] kv : new String[][]{{"enable_freeform_support", prefs.getString("launcher_orig_freeform", "null")}, {"force_resizable_activities", prefs.getString("launcher_orig_resizable", "null")}}) {
+                String v = kv[1] == null ? "null" : kv[1].trim();
+                SplitLauncher.adb(this, v.isEmpty() || "null".equals(v) ? "settings delete global " + kv[0] : "settings put global " + kv[0] + " " + v);
+            }
+            prefs.edit().remove("launcher_orig_freeform").remove("launcher_orig_resizable").apply();
+        }
+        if (relay != null) relay.putStatus("launcher", "none");
+        return home + " · 지움 " + (un.out.contains("Success") ? "OK" : un.out.trim());
+    }
+    private static byte[] readAll(java.io.InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream(); byte[] b = new byte[4096]; int n;
+        while ((n = in.read(b)) > 0) bo.write(b, 0, n);
+        return bo.toByteArray();
+    }
+    // 런처 탈출 — 홈 역할을 풀고 순정 런처를 홈으로 지정한 뒤 홈 키. 셸이 없으면 실패를 돌려준다(런처가 홈 선택 화면으로 대신)
+    private String restoreStockHome() {
+        SplitLauncher.Res a = SplitLauncher.adb(this, "cmd role remove-role-holder android.app.role.HOME com.cseini.linklock 2>&1");
+        SplitLauncher.Res b = SplitLauncher.adb(this, "cmd package set-home-activity com.android.launcher3/com.android.launcher3.home.MainActivity 2>&1");
+        SplitLauncher.adb(this, "input keyevent 3");
+        String r = (a.ok && b.ok) ? "순정 홈으로 되돌림" : "순정 홈 되돌리기 실패(role " + a.exit + " · home " + b.exit + " " + (b.out.length() > 80 ? b.out.substring(0, 80) : b.out).trim() + ")";
+        postToD1("LAUNCHER", "RESTOREHOME → " + r);
+        return r;
     }
     private boolean parkedForLauncher() { return lastGearVal == 3 && lastDriving != 1; }
     private String appLauncherCmd(String action) {
