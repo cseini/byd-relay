@@ -73,7 +73,7 @@ final class SentryPlayPage {
             + "function seekAbs(t){skip(t-(off[cur]+(v.currentTime||0)));}\n"
             + "var M=D.marks||[],POS=['좌상','우상','좌하','우하'],KIND=['움직임','차량','사람','조명 의심'];\n"
             + "(function(){var tl=$('tl'),ml=$('ml');if(!M.length){tl.style.display='none';ml.style.display='none';return;}\n"
-            + " for(var i=0;i<M.length;i++){var m=M[i],t=m[0],c=m[2]<0?'영역':POS[m[2]],lb=f(t)+' '+c+' '+KIND[m[1]]+' '+m[3]+'%';\n"
+            + " for(var i=0;i<M.length;i++){var m=M[i],t=m[0],c=m[2]<0?'영역':POS[m[2]],lb=f(t)+' '+c+' '+(m[1]==0?'움직임':KIND[m[1]]+' · 움직임')+' '+m[3]+'%';\n"
             + "  var b=document.createElement('button');b.className='mk k'+m[1];b.style.left=(100*t/Math.max(tot,1))+'%';b.style.width=Math.max(1.2,100*m[4]/Math.max(tot,1))+'%';b.title=lb;b.setAttribute('aria-label',lb);\n"
             + "  b.onclick=(function(x){return function(){seekAbs(Math.max(0,x-1));if(v.paused)tryPlay();};})(t);tl.appendChild(b);\n"
             + "  if(i<12){var c2=document.createElement('button');c2.textContent=lb;c2.onclick=b.onclick;ml.appendChild(c2);}}})();\n"

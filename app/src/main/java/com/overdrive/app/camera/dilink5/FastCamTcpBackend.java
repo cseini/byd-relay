@@ -230,12 +230,11 @@ public final class FastCamTcpBackend {
             if (sh(d, "pgrep -f 'snif_fast_cam_captur[e]'").isEmpty()) return "종료 확인(" + (i * 100) + "ms)";
             try { Thread.sleep(100); } catch (InterruptedException e) { break; }
         }
-        sh(d, "pkill -9 -f 'snif_fast_cam_captur[e]'; pkill -9 -f 'SnifferCamBridg[e]'");   // ★688 종료 신호가 안 먹으면 강제 종료(최근 3일 11대에서 3초 넘게 남음)
-        for (int i = 0; i < 10; i++) {
-            try { Thread.sleep(100); } catch (InterruptedException e) { break; }
-            if (sh(d, "pgrep -f 'snif_fast_cam_captur[e]'").isEmpty()) return "3초 지나도 남아 있어 강제 종료함(" + (3000 + (i + 1) * 100) + "ms)";
-        }
-        return "강제 종료해도 남아 있음";
+        // ★864 FB2329 씨라7 재부팅 — 캡처 데몬(fast_cam_capture)을 SIGKILL하면 그 카메라 그래픽 버퍼를 surfaceflinger가 아직 쓰던 중에 끊겨
+        //   composer·surfaceflinger가 그래픽 드라이버 안에서 죽고 헤드유닛이 재부팅된다(10-05·10-10 같은 서명). 캡처는 강제로 죽이지 않는다(d5 공유판·비틀런처와 같게).
+        //   그래픽 버퍼를 안 쓰는 우리 브리지만 강제 정리한다.
+        sh(d, "pkill -9 -f 'SnifferCamBridg[e]'");
+        return "3초 지나도 남아 있음(캡처는 강제 종료 안 함)";
     }
 
     // ★688 서비스 시작 때 옛 우리 데몬 정리(앱이 정지 없이 죽으면 setsid·--time 0 데몬이 남아 CPU를 쓴다 — 씨라이언7 079312 실측 의심). 보기 사용 중(consumers>0)이면 건드리지 않는다.
