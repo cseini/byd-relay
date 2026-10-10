@@ -4962,6 +4962,7 @@ public class SnifferService extends Service {
         detectAvm = avm;
         final int view = params != null ? params.optInt("view", 0) : 0;
         detectViewNum = view;
+        if (params != null && params.has("trunk_mode") && prefs != null) prefs.edit().putString("trunk_mode", "kick".equals(params.optString("trunk_mode")) ? "kick" : "cover").apply();   // ★869 폰이 트렁크 방식을 함께 보냄
         final int durationSec = params != null ? params.optInt("sec", 600) : 600;
         final boolean notify = params != null && params.optBoolean("notify", false);   // ★백그라운드 감지확인 push(엣지+쿨다운)
         final boolean stream = BuildConfig.IS_OPERATOR && params != null && params.optBoolean("stream", false);   // ★599 공유판은 프레임 업로드 금지(움직임 %만)   // ★감지하며 그 프레임을 워커에 JPEG로도 올림 → 폰이 /cam으로 라이브+% 동시 확인(테스트/튜닝용). 한 카메라.
@@ -5070,6 +5071,7 @@ public class SnifferService extends Service {
                 postToD1("CAMDETECT", "감지 시작 d5=" + d5 + " avm=" + avm + " view=" + view + " rois=" + rois.size() + " lr=" + lr + " vt=" + vt + " skip=" + skip);
                 final long startTs = System.currentTimeMillis(); detectLastFrameMs = startTs;   // ★첫프레임 워치독 기준
                 final int[] lastTrig = new int[16]; final long[] lastPush = new long[16];
+                final long[] gatePending = new long[2], gateNext = new long[2]; final long[] gateLogAt = new long[2];   // ★869 접근·작업영역 가까운 사람 확인 대기(끝 시각)·다음 확인 시각
                 long end = sentryMode ? Long.MAX_VALUE : System.currentTimeMillis() + durationSec * 1000L; byte[] last = null;
                 final int[] peak = new int[1]; long lastDiag = System.currentTimeMillis(); int procN = 0;
                 int prevMeanY = -1; long lastLightLog = 0, lightQuietUntil = 0;   // ★713/710 조명 변화 거르기
@@ -5157,17 +5159,57 @@ public class SnifferService extends Service {
                                 boolean nearOk = id > 1 || prefs == null || !prefs.getBoolean("near_proto", false) || phoneNearFlag;
                                 if (edge && !nearOk) { if (System.currentTimeMillis() - lastPush[id] > 600_000) { lastPush[id] = System.currentTimeMillis(); postToD1("CAMDETECT", "영역" + id + " 움직임 " + pct + "% — 폰이 차 근처 아님, 알림 안 보냄"); } }
                                 else if (edge && System.currentTimeMillis() - lastPush[id] > 8000) {
-                                    lastPush[id] = System.currentTimeMillis();
-                                    if (relay != null) relay.postCarEvent("motion:" + id + ":" + pct);
+                                    if (id <= 1 && personGateOn()) { if (gatePending[id] == 0) { gatePending[id] = System.currentTimeMillis() + 12000; gateNext[id] = 0; } }   // ★869 바로 안 보내고 가까운 사람 확인 뒤
+                                    else { lastPush[id] = System.currentTimeMillis(); if (relay != null) relay.postCarEvent("motion:" + id + ":" + pct); }
                                 }
                                 lastTrig[id] = trig;
                             }
+                        }
+                        // ★869 접근·작업영역 가까운 사람 확인 — 움직임 엣지 뒤 12초 동안 0.7초마다(한 번에 하나, 감지 루프와 따로) 넓힌 영역에서 YOLO로 본다.
+                        //   멀리서 걸어와 움직임이 먼저 잡혀도, 가까워지는 순간 확인되면 그때 알림이 나간다.
+                        if (notify && !driveMode && !motQuiet) for (int gid = 0; gid <= 1; gid++) {
+                            long nowG = System.currentTimeMillis();
+                            if (gatePending[gid] == 0) continue;
+                            if (nowG > gatePending[gid]) { gatePending[gid] = 0; postToD1("CAMDETECT", "영역" + gid + " 움직임 — 12초 안에 가까운 사람 확인 안 됨, 알림 안 보냄"); continue; }
+                            if (nowG < gateNext[gid] || !detYoloBusy.compareAndSet(false, true)) continue;
+                            gateNext[gid] = nowG + 700;
+                            final int fid = gid, fw = meta[0], fh = meta[1];
+                            final byte[] ff = f;
+                            final int[] gb = widenedRoiBox(rois, gid, fw, fh, view == 5, prefs != null ? prefs.getInt("det_person_expand", 50) / 100f : 0.5f);
+                            int[] ga = agg.get(gid); final int fpct = ga != null ? ga[0] : 0;
+                            if (gb == null) { detYoloBusy.set(false); gatePending[gid] = 0; continue; }
+                            new Thread(() -> {
+                                try {
+                                    float[] r = detClosePerson(ff, fw, fh, gb);
+                                    if (gatePending[fid] == 0) return;
+                                    if (r == null) {   // 인식기를 못 불러오면(이 차 롬에서 모델 실패 등) 예전처럼 바로 알린다 — 접근 보조가 통째로 멈추지 않게
+                                        gatePending[fid] = 0; lastPush[fid] = System.currentTimeMillis();
+                                        if (relay != null) relay.postCarEvent("motion:" + fid + ":" + fpct);
+                                        postToD1("CAMDETECT", "영역" + fid + " 사람 인식기 준비 안 됨 — 예전처럼 움직임만으로 알림");
+                                        return;
+                                    }
+                                    if (closePersonOk(r)) {
+                                        gatePending[fid] = 0; lastPush[fid] = System.currentTimeMillis();
+                                        if (relay != null) relay.postCarEvent("motion:" + fid + ":" + fpct);
+                                        postToD1("CAMDETECT", "영역" + fid + " 가까운 사람 " + Math.round(r[0] * 100) + "% · 크기 " + Math.round(r[1] * 100) + "% (" + (int) r[2] + "ms) → 알림");
+                                    } else if (System.currentTimeMillis() - gateLogAt[fid] > 3000) {
+                                        gateLogAt[fid] = System.currentTimeMillis();
+                                        postToD1("CAMDETECT", "영역" + fid + " 움직임 " + fpct + "% — " + (r == null ? "사람 인식기 준비 안 됨" : "사람 " + Math.round(r[0] * 100) + "% · 크기 " + Math.round(r[1] * 100) + "%(" + (int) r[2] + "ms), 아직 멀거나 사람 아님"));
+                                    }
+                                } catch (Throwable t) { postToD1("CAMDETECT", "사람 확인 실패 " + t.getClass().getSimpleName()); }
+                                finally { detYoloBusy.set(false); }
+                            }, "det-person").start();
                         }
                         // ★전방 대시캠 주행 모드(앞차출발 role3·신호변경 role4) — 헤드유닛 로컬 사운드.
                         if (driveMode) handleFrontAlert(agg, rois, f, meta);
                         // ★가림 감지 트렁크(2026-09-11, 킥 대체) — 다리로 후방 카메라 렌즈를 덮는 동작. 모델 없이 Y 분산(균일도)만으로 판정.
                         //   렌즈 밀착=화면이 어둡고 균일(분산 급락). 덮음 유지(≥coverHold) 후 치움(복귀) 왕복이면 오픈. 지나가는 사람/그림자/조명은 화면이 균일해지지 않아 안 걸림.
-                        if (trunkBbox != null && !driveMode) { int[] m2 = agg.get(2); trunkCover.step(f, meta[0], meta[1], trunkBbox, notify, m2 != null ? m2[0] : 0, "CAMDETECT"); }
+                        if (trunkBbox != null && !driveMode) {
+                            int[] m2 = agg.get(2);
+                            if (prefs != null && "kick".equals(prefs.getString("trunk_mode", "cover")))   // ★869 트렁크 방식 선택(운영자 10-11 "가림이랑 킥 중 선택") — 발차기
+                                trunkKickTick(f, meta[0], meta[1], trunkBbox, widenedRoiBox(rois, 2, meta[0], meta[1], view == 5, prefs.getInt("det_person_expand", 50) / 100f), notify, m2 != null ? m2[0] : 0);
+                            else trunkCover.step(f, meta[0], meta[1], trunkBbox, notify, m2 != null ? m2[0] : 0, "CAMDETECT");
+                        }
                         if (stream) {   // ★감지한 그 프레임을 워커에 JPEG로 → 폰 /cam이 라이브로 봄(테스트/튜닝, 한 카메라)
                             try {
                                 java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
@@ -5185,6 +5227,7 @@ public class SnifferService extends Service {
                 try { if (d5q != null) d5q.stop(); } catch (Throwable ig) {}   // ★607 D5 4분할 소스 정리
                 try { if (dummyIr != null) dummyIr.close(); } catch (Throwable ig) {}   // ★더미 프리뷰 Surface 정리
                 if (md != null) md.close();
+                if (!sentryMode) detModelsRelease();   // ★869 주차 감지 YOLO·발목 인식기 해제
                 if (frontKd != null) { try { frontKd.close(); } catch (Throwable ig) {} frontKd = null; }   // ★전방 객체인식 Interpreter 해제(다음 세션 재init)
                 if (myGen == detectGen && flipDet != null) { flipDet.release(); flipDet = null; flipRgb = null; }   // ★FLIP 링(약 30MB) 해제 — 정차 중 감지가 끝나도 남지 않게
                 if (myGen == detectGen) {   // ★더 새 세션이 시작됐으면(join 1.5s 초과로 겹침) 그 세션 플래그를 지우지 않음
@@ -5250,6 +5293,82 @@ public class SnifferService extends Service {
             }
             if (relay != null) { relay.putState("cover2", coveredNow ? 1 : 0); relay.putState("cover2_v", (int) var); relay.putState("cover2_b", (int) baseVar); relay.putState("cover2_dom", (int) (domRatio * 100)); relay.putState("cover2_domb", (int) (baseDom * 100)); relay.putState("cover2_armed", armed ? 1 : 0); }
         }
+    }
+    // ★869 주차 감지 YOLO 사람 확인(운영자 10-11 "보조·작업영역은 사람 감지를 넣었다 뺐는데 YOLO면 넣는 게 낫다, 영역을 넓게, 아주 가까워서 점수가 높을 때만").
+    //   예전 EfficientDet 사람 게이트는 어안에서 사람 점수 0.00~0.08이라 2026-09-11에 뺐다. YOLO(320 정수)로 영역보다 넓은 곳에서 가장 큰 사람을 찾고,
+    //   점수(det_person_min, 기본 55%)와 크기(넓힌 영역 높이 대비 det_person_close, 기본 45%) 둘 다 넘을 때만 접근·작업영역 알림을 보낸다. 끄는 스위치 det_person_gate.
+    //   트렁크 발차기(trunk_mode=kick)도 같은 '가까운 사람' 확인 뒤 발목(MoveNet) 스윙으로 판정한다(가림 cover가 기본).
+    private com.cseini.motiondetect.YoloDetector detYolo;
+    private final Object detYoloLock = new Object();
+    private final java.util.concurrent.atomic.AtomicBoolean detYoloBusy = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private com.cseini.motiondetect.KickDetector kickKd;
+    private final java.util.concurrent.atomic.AtomicBoolean kickBusy = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile long kickPersonUntil = 0, kickPersonNext = 0, kickLastFire = 0;
+    private boolean personGateOn() { return prefs == null || prefs.getBoolean("det_person_gate", true); }
+    /** 사각형 안에서 가장 큰 사람 {점수, 높이 비율(사각형 대비), 추론ms}. 사람이 없으면 점수 0. 인식기 실패 null */
+    private float[] detClosePerson(byte[] f, int w, int h, int[] box) {
+        synchronized (detYoloLock) {
+            if (detYolo == null) detYolo = new com.cseini.motiondetect.YoloDetector(getApplicationContext(), com.cseini.motiondetect.YoloDetector.MODEL_320_INT8);
+            if (!detYolo.isReady()) return null;
+            float[][] bs = detYolo.detect(f, w, h, box[0], box[1], box[2], box[3], 0.25f);
+            if (bs == null) return null;
+            float best = 0f, bestH = 0f;
+            for (float[] b : bs) if (b[0] == 2f) { float hh = b[5] - b[3]; if (hh > bestH) { bestH = hh; best = b[1]; } }   // 2=사람 — 가장 큰(가까운) 사람
+            return new float[]{best, bestH, detYolo.lastInferMs()};
+        }
+    }
+    private boolean closePersonOk(float[] r) {
+        int minS = prefs != null ? prefs.getInt("det_person_min", 55) : 55, minH = prefs != null ? prefs.getInt("det_person_close", 45) : 45;
+        return r != null && r[0] * 100 >= minS && r[1] * 100 >= minH;
+    }
+    private void detModelsRelease() {
+        synchronized (detYoloLock) { if (detYolo != null) { try { detYolo.close(); } catch (Throwable ignored) {} detYolo = null; } }
+        if (kickKd != null && !kickBusy.get()) { try { kickKd.close(); } catch (Throwable ignored) {} kickKd = null; }
+    }
+    /** 영역 id ROI 묶음을 사방으로 넓혀(expand 배만큼 더) 그 카메라 칸 안으로 자른 픽셀 사각형 {x,y,w,h}. 영역이 없으면 null */
+    private static int[] widenedRoiBox(java.util.List<com.cseini.motiondetect.Roi> rois, int id, int w, int h, boolean quad, float expand) {
+        float x0 = 1f, y0 = 1f, x1 = 0f, y1 = 0f; boolean has = false;
+        for (com.cseini.motiondetect.Roi r : rois) if (r.id == id) { has = true; for (int k = 0; k < r.nx.length; k++) { x0 = Math.min(x0, r.nx[k]); x1 = Math.max(x1, r.nx[k]); y0 = Math.min(y0, r.ny[k]); y1 = Math.max(y1, r.ny[k]); } }
+        if (!has) return null;
+        float cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, bw = (x1 - x0) * (1 + expand), bh = (y1 - y0) * (1 + expand);
+        float tx0 = 0f, ty0 = 0f, tx1 = 1f, ty1 = 1f;
+        if (quad) { tx0 = cx < 0.5f ? 0f : 0.5f; tx1 = tx0 + 0.5f; ty0 = cy < 0.5f ? 0f : 0.5f; ty1 = ty0 + 0.5f; }   // 4분할이면 다른 카메라 칸으로 넘어가지 않게
+        float ax = Math.max(tx0, cx - bw / 2), ay = Math.max(ty0, cy - bh / 2), bx = Math.min(tx1, cx + bw / 2), by = Math.min(ty1, cy + bh / 2);
+        int px = (int) (ax * w), py = (int) (ay * h), pw = (int) ((bx - ax) * w), ph = (int) ((by - ay) * h);
+        return pw >= 32 && ph >= 32 ? new int[]{px, py, pw, ph} : null;
+    }
+    /** 트렁크 발차기 — 가까운 사람이 3초 안에 확인됐을 때만 발목(MoveNet) 스윙을 본다. 둘 다 따로 도는 작업이라 감지 루프를 막지 않는다 */
+    private void trunkKickTick(byte[] f, int w, int h, int[] trunkBox, int[] wideBox, boolean notify, int motPct) {
+        long now = System.currentTimeMillis();
+        if (wideBox != null && motPct >= 3 && now >= kickPersonNext && detYoloBusy.compareAndSet(false, true)) {
+            kickPersonNext = now + 1000;
+            new Thread(() -> {
+                try {
+                    float[] r = detClosePerson(f, w, h, wideBox);
+                    if (closePersonOk(r)) { if (now >= kickPersonUntil) postToD1("KICK", "트렁크 앞 가까운 사람 " + Math.round(r[0] * 100) + "% · 크기 " + Math.round(r[1] * 100) + "% (" + (int) r[2] + "ms) — 발차기 보는 중"); kickPersonUntil = System.currentTimeMillis() + 3000; }
+                } catch (Throwable t) { postToD1("KICK", "사람 확인 실패 " + t.getClass().getSimpleName()); }
+                finally { detYoloBusy.set(false); }
+            }, "kick-person").start();
+        }
+        if (now >= kickPersonUntil || !kickBusy.compareAndSet(false, true)) return;
+        new Thread(() -> {
+            try {
+                if (kickKd == null) kickKd = new com.cseini.motiondetect.KickDetector(getApplicationContext());
+                if (!kickKd.isReady()) return;
+                com.cseini.motiondetect.KickDetector.KickResult kr = kickKd.analyzeKick(f, w, h, trunkBox[0], trunkBox[1], trunkBox[2], trunkBox[3], System.currentTimeMillis());
+                if (kr == null || !kr.kick) return;
+                long t = System.currentTimeMillis();
+                Object dt = relay != null ? relay.getStatus("door_trunk") : null, tc = relay != null ? relay.getStatus("trunk_change_ts") : null;
+                boolean open = dt instanceof Integer && (Integer) dt == 1, justClosed = !open && tc instanceof Long && t - (Long) tc < 30000;
+                if (open || justClosed) { postToD1("KICK", "발차기 인식 — 억제(" + (open ? "트렁크 열린 상태" : "닫힘 30초 이내") + ")"); return; }
+                if (t - kickLastFire < 5000) return;
+                kickLastFire = t;
+                if (notify && autoAllowed() && relay != null) { relay.bumpTrunkTrigger(); beaconWatchTick(); relay.postCarEvent("kick:2"); }
+                if (relay != null) relay.putState("kick2_trig", t);
+                postToD1("KICK", "★트렁크 트리거(발차기) 신뢰도 " + Math.round(kr.kickConfidence * 100) + "%" + (notify ? " → kick:2 발송" : " (테스트-표시만)"));
+            } catch (Throwable t) { postToD1("KICK", "발차기 판정 실패 " + t.getClass().getSimpleName()); }
+            finally { kickBusy.set(false); }
+        }, "kick-ankle").start();
     }
     private double[] lumaMeanVar(byte[] nv21, int w, int h, int[] bbox) {
         int x0 = Math.max(0, bbox[0]), y0 = Math.max(0, bbox[1]);
@@ -13970,6 +14089,15 @@ public class SnifferService extends Service {
         try {
             byte[] out = new byte[320 * 320 * 3 / 2];
             if (!vw.remap(f, w, h, out)) return 0f;
+            // ★869 운영자 10-11 "깜빡이 때 BSD 방향 차량 객체인식, 다 진행" — 시동 중 미리 불러 둔 YOLO(320 정수)가 있으면 그것으로(어안에서 차 점수가 2~3배 높음), 없으면 EfficientDet
+            synchronized (bsdYoloLock) {
+                if (bsdYolo != null && bsdYolo.isReady()) {
+                    float[][] bs = bsdYolo.detect(out, 320, 320, 0, 0, 320, 320, 0.20f);
+                    float best = 0f;
+                    if (bs != null) for (float[] b : bs) if (b[0] == 1f && b[1] > best) best = b[1];   // 1=차량
+                    return best;
+                }
+            }
             float[] r = bsdKd.analyzeClass(out, 320, 320, 0, 0, 320, 320, new int[]{2, 3, 5, 7});
             return r == null ? 0f : r[0];
         } finally { vw.close(); }

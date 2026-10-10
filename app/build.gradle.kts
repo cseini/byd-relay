@@ -19,8 +19,8 @@ android {
         applicationId = "com.cseini.bydsniffer"
         minSdk = 25
         targetSdk = 25   // ★일렉트로 동일 — 레거시 타깃으로 API 26+ 백그라운드 제한(서비스 강제종료·Doze 네트워크 차단) 회피
-        versionCode = 868
-        versionName = "868.0"
+        versionCode = 869
+        versionName = "869.0"
         buildConfigField("String", "RELAY_SECRET", "\"" + relaySecret + "\"")
         buildConfigField("String", "UPLOAD_SECRET", "\"" + uploadSecret + "\"")
         buildConfigField("boolean", "D5_SENTRY", d5Sentry.toString())
