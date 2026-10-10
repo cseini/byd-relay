@@ -11,7 +11,11 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
@@ -245,6 +249,113 @@ public final class SentryStorage {
         List<File> out = new ArrayList<>();
         for (File c : cands) if (!c.equals(cur) && !out.contains(c) && c.isDirectory()) out.add(c);
         return out;
+    }
+
+    // ── 내장에 남은 영상을 외장으로 옮기기(운영자 10-10 "작은 기능") ──────────────────────────────────────────
+    // 외장(SD·USB)을 골랐는데 시동 끈 직후 외장이 안 붙어 내장·앱 전용 폴더에 녹화된 영상은, 외장이 다시 붙어도 거기 남아 내장 용량을 차지했다.
+    // 새 녹화는 지금처럼 외장에 바로 쓰고, 내장에 남은 것만 천천히 외장으로 옮긴다.
+
+    // 외장(공용 폴더)에 쓰고 있어서 옮겨 올 수 있는 상태인가
+    public synchronized boolean migrationTargetReady() {
+        return !"internal".equals(settings.storage) && "public".equals(tier());
+    }
+
+    // 폴백 때 쓴 내장 단계 루트(앱 전용 외부 폴더·앱 내부 폴더) 중 영상이 남아 있을 수 있는 곳
+    public synchronized List<File> leftoverRoots() {
+        File cur = root();
+        List<File> out = new ArrayList<>();
+        File ext = ctx.getExternalFilesDir(null);
+        if (ext != null) out.add(new File(ext, "Sentry"));
+        out.add(new File(ctx.getFilesDir(), "Sentry"));
+        List<File> keep = new ArrayList<>();
+        for (File r : out) {
+            String[] kids = r.list();
+            if (!r.equals(cur) && r.isDirectory() && kids != null && kids.length > 0 && !keep.contains(r)) keep.add(r);
+        }
+        return keep;
+    }
+
+    // 이 이벤트가 내장 단계에 남아 있으면 그 폴더, 아니면 null
+    public synchronized File leftoverDir(String eventId) {
+        String rel = eventRel(eventId);
+        for (File r : leftoverRoots()) {
+            File d = new File(r, rel);
+            if (d.isDirectory()) return d;
+        }
+        return null;
+    }
+
+    // 폴더 안 파일 중 가장 늦게 바뀐 시각(진행 중인 이벤트·방금 닫힌 이벤트를 건드리지 않기 위함)
+    static long lastModifiedTree(File dir) {
+        long m = dir.lastModified();
+        File[] kids = dir.listFiles();
+        if (kids != null) for (File k : kids) m = Math.max(m, k.isDirectory() ? lastModifiedTree(k) : k.lastModified());
+        return m;
+    }
+
+    // 이벤트 폴더를 destRoot/rel로 옮긴다 — 임시 폴더(<id>.moving)에 복사하고 파일마다 크기를 확인한 뒤 이름을 바꾸고, 그 다음에야 원본을 지운다.
+    // 중간에 실패하면 원본은 그대로 남고 임시 폴더만 치운다. 대상에 이미 있으면 IOException(원본 유지). 옮긴 바이트 수를 돌려준다.
+    static long moveEventDir(File srcEvent, File destRoot, String rel) throws IOException {
+        File dest = new File(destRoot, rel);
+        if (dest.exists()) throw new IOException("대상에 이미 있음: " + dest);
+        File parent = dest.getParentFile();
+        if (parent == null || (!parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory())) throw new IOException("대상 폴더 생성 실패: " + parent);
+        File tmp = new File(parent, dest.getName() + ".moving");
+        SentryIndex.deleteRecursive(tmp);
+        long bytes;
+        try {
+            bytes = copyTree(srcEvent, tmp);
+            if (!tmp.renameTo(dest)) throw new IOException("이름 변경 실패: " + tmp);
+        } catch (IOException | RuntimeException e) {
+            SentryIndex.deleteRecursive(tmp);
+            throw e;
+        }
+        SentryIndex.deleteRecursive(srcEvent);   // 복사·크기 확인·이름 변경이 모두 끝난 뒤에만 원본을 지운다
+        File day = srcEvent.getParentFile();
+        for (int i = 0; i < 2 && day != null; i++) {   // 비게 된 날짜·월 폴더만 정리(루트는 둔다)
+            String[] left = day.list();
+            if (left != null && left.length == 0 && day.delete()) day = day.getParentFile(); else break;
+        }
+        return bytes;
+    }
+
+    private static long copyTree(File src, File dst) throws IOException {
+        if (src.isDirectory()) {
+            if (!dst.mkdirs() && !dst.isDirectory()) throw new IOException("폴더 생성 실패: " + dst);
+            long sum = 0;
+            File[] kids = src.listFiles();
+            if (kids != null) for (File k : kids) sum += copyTree(k, new File(dst, k.getName()));
+            return sum;
+        }
+        long expect = src.length();
+        try (InputStream in = new FileInputStream(src); OutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.flush();
+        }
+        if (dst.length() != expect) throw new IOException("복사 크기 불일치: " + src.getName() + " " + dst.length() + "/" + expect);
+        dst.setLastModified(src.lastModified());
+        return expect;
+    }
+
+    // 옮기다 멈춘 임시 폴더(<id>.moving)가 오래 남았으면 지운다(시동 끄기·전원 차단 등) — 이름이 이벤트 id 형식이 아니라 목록에는 안 보인다. 지운 개수
+    static int cleanMovingLeftovers(File root, long olderThanMs) {
+        int n = 0;
+        File[] months = root.listFiles();
+        if (months == null) return 0;
+        for (File mo : months) {
+            File[] days = mo.listFiles();
+            if (days == null) continue;
+            for (File d : days) {
+                File[] ev = d.listFiles();
+                if (ev == null) continue;
+                for (File e : ev) {
+                    if (e.isDirectory() && e.getName().endsWith(".moving") && System.currentTimeMillis() - lastModifiedTree(e) > olderThanMs) { SentryIndex.deleteRecursive(e); n++; }
+                }
+            }
+        }
+        return n;
     }
 
     // 현재 루트가 쓴 양(한도 계산용 — 한도는 선택한 볼륨 기준)
