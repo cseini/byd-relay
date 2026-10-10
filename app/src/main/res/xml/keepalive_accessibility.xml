@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 상시생존용 접근성 서비스 — 실제 접근성 기능은 안 씀. 시스템이 프로세스를 죽이지 않게 하는 용도(Electro 방식). -->
+<!-- ★v47: 모든 창 이벤트 구독 + interactive window 조회 → 시스템이 "활성 접근성 서비스"로 더 강하게 유지·재바인딩. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true" />

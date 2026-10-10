@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">링크락 릴레이</string>
+    <string name="sniffer_notification">링크락 릴레이 작동 중</string>
+    <string name="clear_logs">지우기</string>
+    <string name="share_csv">CSV 공유</string>
+    <string name="upload_csv">서버로 전송</string>
+    <string name="toggle_logging">로깅 시작/중지</string>
+</resources>

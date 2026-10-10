@@ -1,0 +1,1352 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<title>링크락 클러스터</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="링크락 클러스터">
+<meta name="mobile-web-app-capable" content="yes"><meta name="theme-color" content="#000000">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Noto+Sans+KR:wght@500;700&display=swap">
+<style>
+/* 계기판 v2 — 야간 OLED 순검정. 가로 거치 전제. 좌/우는 위젯 대시보드(자유 채움·크기·순서). 테마는 액센트/표면 토큰만 바뀐다. */
+:root{--bg:#000;--surface:#0e141a;--surface2:#151d25;--line:#1b242e;--tick:#26323c;
+      --text:#eef4f8;--muted:#7c8a99;--dim:#3a4652;
+      /* 표시등 색 규약 — 순색(#0f0/#f00/#00f) 금지. 어두운 배경에서 눈부시지 않은 톤. */
+      --tl-info:#c7d3dd;--tl-ok:#4fbf7e;--tl-beam:#5b8dd6;--tl-warn:#d99a2b;--tl-alert:#d95f5f;
+      --accent:#4fd6ec;--glow:rgba(79,214,236,.55);--amber:#ffb020;--green:#3ddc97;--red:#ff5252;--orange:#ff8a3d;
+      --num:"Rajdhani","Avenir Next Condensed","Roboto Condensed","Helvetica Neue",sans-serif;
+      --sans:"Noto Sans KR",-apple-system,"Apple SD Gothic Neo",Roboto,sans-serif}
+:root[data-look="premium"]{--surface:#0a0a0c;--surface2:#141416;--line:#1e1e22;--tick:#2b2b31;--muted:#9a9aa2;--dim:#45454d;--accent:#ffb84d;--glow:rgba(255,184,77,.5);--green:#8fe3b0}
+:root[data-look="eco"]{--surface:#0a1410;--surface2:#101d17;--line:#172a21;--tick:#1f3a2d;--muted:#7c9a8a;--dim:#2f4a3d;--accent:#5be49b;--glow:rgba(91,228,155,.5)}
+:root[data-look="sport"]{--surface:#150b0b;--surface2:#201010;--line:#2c1717;--tick:#3d1f1f;--muted:#9c7c7c;--dim:#4d2c2c;--accent:#ff4d4d;--glow:rgba(255,77,77,.55);--green:#5be49b}
+:root[data-look="ember"]{--surface:#140f0b;--surface2:#1d1610;--line:#2a1f17;--tick:#3a2a1f;--muted:#9a8878;--dim:#4a3a2e;--accent:#ff7a3d;--glow:rgba(255,122,61,.5);--amber:#ffd23f}
+:root[data-look="neon"]{--surface:#0c0a17;--surface2:#151130;--line:#231d44;--tick:#2e2758;--muted:#8b84ad;--dim:#403a63;--accent:#b78cff;--glow:rgba(183,140,255,.6);--green:#5ef2a8}
+:root[data-look="mono"]{--surface:#0a0a0a;--surface2:#141414;--line:#1f1f1f;--tick:#2a2a2a;--muted:#8a8a8a;--dim:#3d3d3d;--accent:#e6e6e6;--glow:rgba(0,0,0,0);--green:#cfcfcf}
+html{color-scheme:dark;height:100%;background:var(--bg)}
+body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);overflow:hidden;
+     -webkit-font-smoothing:antialiased;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+*{box-sizing:border-box}[hidden]{display:none!important}
+
+.stage{position:fixed;inset:0;height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+       padding:calc(4px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));gap:4px}
+
+/* 상단 */
+.top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;height:30px}
+.arrows{display:flex;gap:56px;justify-content:center;align-items:center}
+.arr{width:34px;height:22px;fill:var(--dim);transition:fill .1s}
+.arr.on{fill:var(--amber);filter:drop-shadow(0 0 6px rgba(255,176,32,.65));animation:blink .6s steps(1,end) infinite}
+@keyframes blink{50%{opacity:.12}}
+.topL{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);font-weight:500}
+.topL i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--glow)}
+.topL i.bad{background:var(--red);box-shadow:none}
+.topL .mode{font:700 11px var(--num);letter-spacing:.14em;color:var(--accent);margin-left:6px}
+/* ★566 우상단 여백 — 링크락 앱은 이 웹뷰 위 topTrailing에 자기 ✕ 닫기 버튼을 얹는다(iOS ClusterView·안드 동일).
+   여백이 없으면 HUD 버튼과 ✕가 같은 자리에 겹쳐 둘 다 누르기 어려웠다. 브라우저로 직접 열 땐 살짝 안쪽에 붙을 뿐 무해. */
+.topR{display:flex;justify-content:flex-end;gap:6px;align-items:center;padding-right:46px}
+.btn{white-space:nowrap;flex-shrink:0;appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:8px;height:26px;padding:0 9px;font:500 11px var(--sans);display:flex;align-items:center;gap:5px;cursor:pointer}
+.btn.pri{background:var(--accent);color:#04141a;border-color:var(--accent);font-weight:700}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.demo{font:600 10px var(--num);letter-spacing:.14em;color:var(--amber);border:1px solid rgba(255,176,32,.4);border-radius:6px;padding:2px 6px}
+
+/* 본체: 좌 위젯 | 중앙 속도계 | 우 위젯 */
+.main{min-height:0;display:grid;grid-template-columns:minmax(180px,1.15fr) minmax(230px,1.3fr) minmax(180px,1.15fr);gap:8px}
+/* ★552 좁은 화면(폰 세로) — 위 3칸은 최소폭 합이 590px라 폰 세로(약 390px)에선 우측 칸이 화면 밖으로 밀려 잘린다.
+   좁으면 한 줄씩 쌓고 중앙(속도계)을 맨 위로. 가로로 돌리면 원래 3칸 배치로 돌아간다. */
+@media (max-width:680px){
+  /* ★09-30 갤럭시 세로 깨짐(운영자) — 1fr 은 칸 최소폭(타이어 줄 449px)까지 늘어나 카드가 화면 오른쪽 밖으로 잘렸다. minmax(0,1fr)로 화면 폭에 맞춘다. */
+  .main{grid-template-columns:minmax(0,1fr);grid-auto-rows:minmax(150px,auto);overflow:auto;-webkit-overflow-scrolling:touch}
+  #sideC{order:1}#sideL{order:2}#sideR{order:3}
+  /* 상단 바 — 좁으면 깜빡이 화살표를 둘째 줄로 내려 설정·전체화면·HUD 버튼이 잘리지 않게 한다 */
+  .top{grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;height:auto;row-gap:4px}
+  .topL{grid-column:1;grid-row:1}
+  .topR{grid-column:2;grid-row:1;flex-wrap:wrap;padding-right:40px}
+  .arrows{grid-column:1 / 3;grid-row:2;gap:40px}
+  .tyres{min-width:0}.tyres span{min-width:0}
+  #remoteBanner{top:calc(env(safe-area-inset-top) + 76px)!important}
+}
+#remoteBanner{pointer-events:none}
+
+/* 측면 = 위젯 그리드(자유 채움). 2열, 행은 내용에 따라 1fr씩 균등 배분 → 세로 꽉 참. 깜빡이 시 카메라 오버레이 */
+.side{position:relative;min-height:0;background:var(--surface);border-radius:14px;border:1.5px solid var(--line);overflow:hidden;
+      display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:1px;transition:border-color .12s,box-shadow .12s}
+.side.editing{outline:2px dashed var(--accent);outline-offset:-2px}
+/* 위젯 셀 — ★직접 조작 편집기(2026-09-28): x,y,w,h를 인라인 grid-column/row로 배치(grid-auto-flow dense 제거 — 재정렬 불일치 원인이었음) */
+.w{position:relative;background:var(--surface);display:flex;flex-direction:column;justify-content:center;gap:2px;padding:5px 12px;min-width:0;overflow:hidden}
+.w.w2{grid-column:span 2} .w.h2{grid-row:span 2}
+.w .ic{width:17px;height:17px;color:var(--muted);flex:none}
+.w.h2 .ic,.w.w2.h2 .ic{width:20px;height:20px}
+.w .ic svg{width:100%;height:100%;display:block;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.w .v{font-family:var(--num);font-weight:700;font-size:clamp(20px,3.6vw,32px);line-height:1;font-variant-numeric:tabular-nums;letter-spacing:.01em;white-space:nowrap}
+.w.h2 .v,.w.w2 .v{font-size:clamp(26px,5vw,44px)}
+.w .v small{font-family:var(--sans);font-size:10px;font-weight:500;color:var(--muted);margin-left:4px;letter-spacing:0}
+.w .v.txt{font-size:clamp(15px,2.9vw,22px);font-family:var(--sans);font-weight:700}
+.w.h2 .v.txt,.w.w2 .v.txt{font-size:clamp(17px,3.2vw,26px)}
+.w .v.regen{color:var(--green)}
+.w .cap{font:500 9px var(--sans);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tyres{display:grid;grid-template-columns:1fr 1fr;gap:1px 10px;font-family:var(--num);font-weight:700;font-size:clamp(13px,2.3vw,19px);line-height:1.1;font-variant-numeric:tabular-nums}
+.tyres span{display:flex;justify-content:space-between;gap:6px}.tyres i{font:500 9px var(--sans);color:var(--muted);font-style:normal}
+/* 편집 오버레이 */
+.w.editing{cursor:pointer;touch-action:none}
+.w .edit-badge{position:absolute;top:4px;right:5px;display:none;align-items:center;gap:4px;z-index:5;cursor:pointer}
+.w.editing .edit-badge{display:flex}
+.w .edit-badge b{font:700 9px var(--num);color:var(--accent);background:var(--surface2);border:1px solid var(--accent);border-radius:5px;padding:1px 4px}
+.w.editing::after{content:"";position:absolute;inset:0;border:1.5px solid var(--accent);border-radius:8px;opacity:.5;pointer-events:none}
+.w.add{align-items:center;justify-content:center;color:var(--accent);cursor:pointer;background:transparent;border:1.5px dashed var(--line)}
+.w.add svg{width:22px;height:22px;stroke:var(--accent);fill:none;stroke-width:2}
+.w.add.float{position:absolute;right:6px;bottom:6px;width:40px;height:40px;min-height:0;border-radius:50%;background:var(--surface);z-index:5}
+/* ★직접 조작 편집기 — 탭 선택(.sel) 시 네 모서리 핸들. .side가 overflow:hidden이라 핸들은 위젯 안쪽(0,0 기준)에 둔다(바깥으로 내면 잘림). */
+.w.sel{outline:2px solid var(--accent);outline-offset:-2px;z-index:3}
+.w .rh{position:absolute;width:22px;height:22px;display:none;z-index:4;touch-action:none}
+.w.sel .rh{display:block}
+.w.sel:not(.spdw) .edit-badge{background:var(--accent);border-color:var(--accent);padding:3px 8px;border-radius:7px;font-size:11px}
+.w.sel:not(.spdw) .edit-badge b{display:none}
+.w.sel:not(.spdw) .edit-badge::after{content:'✎ 바꾸기·삭제';color:#04141a;font-weight:700}
+.w .rh::after{content:"";position:absolute;width:11px;height:11px;background:var(--accent);border-radius:3px;box-shadow:0 0 0 2px rgba(0,0,0,.5)}
+.w .rh[data-corner="nw"]{left:0;top:0;cursor:nwse-resize}.w .rh[data-corner="nw"]::after{left:0;top:0}
+.w .rh[data-corner="ne"]{right:0;top:0;cursor:nesw-resize}.w .rh[data-corner="ne"]::after{right:0;top:0}
+.w .rh[data-corner="sw"]{left:0;bottom:0;cursor:nesw-resize}.w .rh[data-corner="sw"]::after{left:0;bottom:0}
+.w .rh[data-corner="se"]{right:0;bottom:0;cursor:nwse-resize}.w .rh[data-corner="se"]::after{right:0;bottom:0}
+
+/* 중앙 섹션도 위젯 그리드로 (속도계 포함) — 레이아웃은 좌/우와 동일 */
+#sideC{grid-template-rows:auto;grid-template-columns:1fr 1fr !important}
+.gauge{position:relative;min-height:0;display:flex;align-items:flex-end;justify-content:center}
+.gauge svg{position:absolute;inset:0;width:100%;height:100%}
+.gauge .track{fill:none;stroke:var(--tick);stroke-width:5;stroke-linecap:round}
+.gauge .prog{fill:none;stroke:var(--accent);stroke-width:5;stroke-linecap:round;transition:stroke-dasharray .35s cubic-bezier(.2,.7,.2,1);filter:drop-shadow(0 0 4px var(--glow))}
+.gauge .tk{stroke:var(--dim);stroke-width:1.5}.gauge .tk.maj{stroke:var(--muted);stroke-width:2}
+.gauge text{fill:var(--muted);font:600 11px var(--num);text-anchor:middle}
+.gauge .needle{stroke:var(--accent);stroke-width:3;stroke-linecap:round;filter:drop-shadow(0 0 4px var(--glow));transition:transform .3s cubic-bezier(.2,.7,.2,1);transform-origin:150px 150px;display:none}
+.gauge .hub{fill:var(--surface2);stroke:var(--accent);stroke-width:2;display:none}
+.readout{position:relative;text-align:center;line-height:1;padding-bottom:2px}
+.spd{font-family:var(--num);font-weight:700;font-size:clamp(64px,15vh,112px);line-height:.86;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.unit{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.12em;margin-top:4px}
+:root[data-gauge="analog"] .gauge .needle{display:block}
+:root[data-gauge="analog"] .gauge .prog{display:none}
+/* 바늘은 바깥 링(r62~106)만 훑고, 숫자는 하단 중앙(안쪽 클리어존)에 → 겹치지 않음 */
+:root[data-gauge="analog"] .spd{font-size:clamp(30px,6vh,46px)}
+:root[data-gauge="analog"] .unit{margin-top:2px}
+
+/* 형태 테마 — shape */
+:root[data-shape="elegant"] .spd{font-size:clamp(72px,16vh,120px)}
+:root[data-shape="elegant"] .gauge .track{stroke-width:6}
+:root[data-shape="elegant"] .gauge .prog{stroke-width:6}
+:root[data-shape="race"] .gauge svg{display:none}
+:root[data-shape="race"] .gauge{display:flex;align-items:center;justify-content:center;min-height:auto}
+:root[data-shape="race"] .spd{font-size:clamp(52px,12vh,88px);font-weight:800}
+:root[data-shape="race"] .readout{padding:0;flex-direction:row;align-items:center;gap:8px}
+:root[data-shape="race"] .unit{margin:0;font-size:14px}
+:root[data-shape="minimal"] .gauge svg{display:none}
+:root[data-shape="minimal"] .gauge{display:flex;align-items:center;justify-content:center}
+:root[data-shape="minimal"] .spd{font-size:clamp(68px,18vh,140px);font-weight:900}
+:root[data-shape="minimal"] .readout{padding:0;flex-direction:column}
+.gears{display:flex;justify-content:center;gap:14px;margin-top:2px}
+.gears span{font:700 16px var(--num);color:var(--dim);letter-spacing:.06em;padding:0 4px;line-height:1.3;border-bottom:2px solid transparent}
+.gears span.on{color:var(--text);border-bottom-color:var(--accent)}
+.gears span.on[data-g="R"]{color:var(--orange);border-bottom-color:var(--orange)}
+.gears span.on[data-g="P"]{border-bottom-color:var(--muted)}
+
+/* 하단 레일 */
+.rail{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;height:36px}
+.chips{display:flex;gap:5px;justify-content:center;flex-wrap:nowrap;overflow:hidden;min-width:0}
+/* ★표시등 = 실차 텔테일 방식 — 테두리 칩이 아니라 아이콘 자체가 상태를 말한다. 꺼진 것은 렌더 자체를 안 하므로 평소엔 비어 있다.
+   색 규약(순색 금지, 야간 눈부심 방지로 채도 낮춤): 정보=흰색 / 정상작동=녹색 / 상향등=파랑 / 주의=호박 / 경고=적색. */
+.chip{display:flex;align-items:center;gap:3px;border:0;border-radius:0;padding:2px 5px;color:var(--tl-info)}
+.chip svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:block}
+.chip b{font-family:var(--num);font-size:12px;font-weight:700;color:inherit}
+.chip.on{color:var(--tl-ok)}
+.chip.info{color:var(--tl-info)}
+.chip.beam{color:var(--tl-beam)}
+.chip.warn{color:var(--tl-warn)}
+.chip.alert{color:var(--tl-alert)}
+/* 점멸은 실제로 점멸해야 하는 것만(방향지시·비상등). 경고등은 상시 점등이 원칙 — 조수석 벨트가 계속 깜빡이던 문제가 여기서 왔다. */
+.chip.blink{animation:tlblink 1s steps(1,end) infinite}
+@keyframes tlblink{50%{opacity:.15}}
+.chip svg{width:18px;height:18px}
+.soc{display:flex;align-items:center;gap:8px;min-width:150px}
+.soc .bic,.range .bic{width:17px;height:17px;color:var(--muted);flex:none}
+.soc .bic svg,.range .bic svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.soc .bar{flex:1;height:7px;border-radius:99px;background:var(--surface2);overflow:hidden;position:relative}
+.soc .bar i{position:absolute;inset:0 auto 0 0;background:var(--green);border-radius:99px;transition:width .5s}
+.soc .bar i.low{background:var(--orange)}.soc .bar i.crit{background:var(--red)}
+.soc b{font:700 16px var(--num);font-variant-numeric:tabular-nums;min-width:42px;text-align:right}
+.soc b small,.range small{font:500 10px var(--sans);color:var(--muted)}
+.range{display:flex;align-items:center;gap:6px;color:var(--muted);white-space:nowrap}
+.range b{font:700 16px var(--num);color:var(--text);font-variant-numeric:tabular-nums}
+
+/* 시트/오버레이 공용 */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20}
+.sheet{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(720px,100vw);max-height:92vh;overflow:auto;z-index:21;background:var(--surface);border:1px solid var(--line);border-bottom:0;border-radius:16px 16px 0 0;padding:12px 16px calc(14px + env(safe-area-inset-bottom))}
+/* ★위젯 편집 — 항목 카드에 아이콘·라벨과 함께 현재 값을 보여준다(운영자: "라벨에 따른 값이나 이미지도 같이 보여줘야 어디에 어떻게 배치할지 고른다"). */
+.wsec{margin:10px 0 6px;font:600 11px var(--sans);color:var(--muted);letter-spacing:.06em}
+.wsec small{font-weight:500;color:var(--dim);margin-left:6px;letter-spacing:0}
+.wgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px;max-height:46vh;overflow:auto;padding:2px}
+.wcard{display:flex;flex-direction:column;gap:3px;align-items:flex-start;padding:8px 9px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);color:var(--muted);min-height:58px;text-align:left}
+.wcard.on{border-color:var(--accent);color:var(--text);box-shadow:0 0 0 1px var(--accent) inset}
+.wcard .wl{display:flex;align-items:center;gap:5px;font:500 11px var(--sans)}
+.wcard .wl svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;display:block}
+.wcard .wv{font:700 15px var(--num);color:var(--text);font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.wcard .wv small{font-size:9px;color:var(--muted);margin-left:2px}
+.sheet h2{margin:0 0 8px;font:700 15px var(--sans);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.sheet h3{margin:12px 0 6px;font:500 11px var(--sans);color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.sheet h3 small{text-transform:none;letter-spacing:0;color:var(--dim);margin-left:6px}
+.looks{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px}
+.look{border:1.5px solid var(--line);border-radius:10px;padding:7px;background:var(--bg);cursor:pointer;display:flex;flex-direction:column;gap:6px;color:var(--text)}
+.look.on{border-color:var(--accent)}
+.look .sw{height:22px;border-radius:6px;display:flex;align-items:flex-end;padding:3px;gap:3px}
+.look .sw i{flex:1;height:100%;border-radius:3px}
+.look span{font:600 12px var(--sans)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-right:10px;margin-bottom:6px}
+.seg button{appearance:none;border:0;background:var(--bg);color:var(--muted);padding:8px 14px;font:600 13px var(--sans);cursor:pointer;min-height:40px}
+.seg button.on{background:var(--surface2);color:var(--text)}
+.chipSel{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.pick{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;min-height:52px;padding:8px 6px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);color:var(--muted);cursor:pointer}
+.pick .pv{display:flex;align-items:center;gap:5px;color:var(--text);font:700 12px var(--sans)}
+.pick .pv svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.pickov{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:flex-end;justify-content:center}
+.pickbox{width:min(560px,100vw);max-height:80vh;background:var(--surface);border:1px solid var(--line);border-bottom:0;border-radius:16px 16px 0 0;display:flex;flex-direction:column;overflow:hidden}
+.pickhd{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line)}
+.pickhd b{font:700 15px var(--sans)}
+.picklist{overflow:auto;padding:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.pgrp{grid-column:1/-1;font:500 11px var(--sans);color:var(--muted);letter-spacing:.06em;text-transform:uppercase;padding:8px 8px 2px}
+.prow{display:flex;align-items:center;gap:8px;text-align:left;min-height:46px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:600 13px var(--sans);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prow svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;color:var(--muted)}
+.prow.on{border-color:var(--accent);color:var(--accent)}.prow.on svg{color:var(--accent)}
+/* 위젯 편집 액션 */
+.wact{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:45;display:flex;align-items:flex-end;justify-content:center}
+.wbox{width:min(520px,100vw);max-height:85vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-bottom:0;border-radius:16px 16px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
+.wbox h4{margin:0;font:700 14px var(--sans);display:flex;align-items:center;gap:6px}
+.wbox h4 svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2}
+.wrow{display:flex;gap:8px;flex-wrap:wrap}
+.wrow button{flex:1;min-width:70px;min-height:46px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:600 13px var(--sans);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
+.wrow button.danger{color:var(--red);border-color:rgba(255,82,82,.4)}
+.wrow button.sz{flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}
+.wrow button.sz.on{color:var(--accent);border-color:var(--accent)}
+.wrow button.sz .box{border:1.5px solid currentColor;border-radius:3px}
+.toast{position:fixed;left:50%;bottom:calc(46px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--surface2);border:1px solid var(--line);color:var(--text);font-size:12px;padding:8px 14px;border-radius:10px;max-width:86vw;text-align:center;line-height:1.4;z-index:50}
+@media (prefers-reduced-motion:reduce){.arr.on{animation:none}.gauge .prog,.gauge .needle{transition:none}}
+@media (display-mode:fullscreen),(display-mode:standalone){#fsBtn{display:none}}
+body.hud{transform:scaleX(-1)}
+/* ★665 다이얼형 위젯·위젯 시트(형식/크기)·설정 탭 */
+.w .v.dialv{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;font-size:0;line-height:0}
+.w .v.dialv svg{width:100%;height:100%;display:block;overflow:visible}
+.dl-track{fill:none;stroke:var(--tick);stroke-width:7;stroke-linecap:round}
+.dl-prog{fill:none;stroke:var(--accent);stroke-width:7;stroke-linecap:round}
+.dl-prog.neg{stroke:var(--green)}
+.dl-needle{stroke:var(--text);stroke-width:2.2;stroke-linecap:round}
+.dl-val{fill:var(--text);font:700 17px var(--num);text-anchor:middle}
+.dl-unit{fill:var(--muted);font:500 8px var(--sans);text-anchor:middle}
+.tabs{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.tabs button{appearance:none;border:0;background:transparent;color:var(--muted);font:600 13px var(--sans);padding:10px 14px;border-bottom:2px solid transparent;cursor:pointer;min-height:40px}
+.tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
+.optrow{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px}
+.optrow button{appearance:none;border:1px solid var(--line);background:var(--surface2);color:var(--muted);border-radius:99px;padding:8px 14px;font:600 13px var(--sans);cursor:pointer;min-height:40px}
+.optrow button.on{border-color:var(--accent);color:var(--text);box-shadow:0 0 0 1px var(--accent) inset}
+.optrow button[disabled]{opacity:.35;cursor:default}
+
+/* ★665 레이아웃 정리(운영자 09-30 "회전·X 버튼이 내 UI와 겹침 / 확인 버튼은 상시 / 헤더는 다이내믹 아래, 푸터는 하단 앱이동 영역 위") —
+   폰 앱이 화면 오른쪽 위에 얹는 회전·닫기 버튼 자리(--chr)를 앱 안에서는 비워 두고, 설정 시트는 [머리 고정 | 본문 스크롤 | 확인 버튼 고정]으로 나눈다. */
+html{--chr:0px}
+html.inapp{--chr:108px}
+.top{padding-right:var(--chr)}
+.shH{flex:0 0 auto;display:flex;justify-content:space-between;align-items:center;gap:8px;padding:calc(8px + env(safe-area-inset-top)) calc(16px + var(--chr)) 8px calc(16px + env(safe-area-inset-left));border-bottom:1px solid var(--line)}
+.shB{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 16px;display:flex;flex-direction:column;gap:12px}
+.shB > *{flex-shrink:0}
+.shF{flex:0 0 auto;display:flex;gap:8px;justify-content:flex-end;padding:10px 16px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:inherit}
+.sheet{display:flex;flex-direction:column;padding:0;overflow:hidden;max-height:calc(100dvh - env(safe-area-inset-top) - 56px)}
+.sheet .shB.shBs{display:block}
+.sheet .shH{padding-right:16px}
+.sheet .shF{background:var(--surface)}
+.wbox{padding:0;overflow:hidden;gap:0;max-height:calc(100dvh - env(safe-area-inset-top) - 56px)}
+.wbox .wH{padding-right:16px}
+.wbox .wB{display:block}
+.wbox .wgrid{max-height:none;overflow:visible}
+.wbox .wrow{background:var(--surface);flex-wrap:nowrap}
+.dl-val{font-size:21px}
+</style>
+<script>
+(function(){   // ★665 폰 앱 안에서 열렸는지 — 앱이 화면 오른쪽 위에 얹는 회전·닫기 버튼 자리를 비우려고
+  try {
+    var ua = navigator.userAgent || '', q = new URLSearchParams(location.search);
+    var ios = /iPhone|iPad|iPod/.test(ua), inIosApp = ios && !/Safari/.test(ua);
+    var inAndroidApp = /; wv\)/.test(ua) || !!window.LKAndroid;
+    if (q.get('remote') === '1' || inIosApp || inAndroidApp || (window.webkit && window.webkit.messageHandlers)) document.documentElement.classList.add('inapp');
+  } catch (e) {}
+})();
+</script>
+</head><body>
+<div class="stage">
+  <div class="top">
+    <div class="topL"><i id="dot" class="bad"></i><span id="connTxt">연결 중…</span><span class="mode" id="modeTxt"></span></div>
+    <div class="arrows">
+      <svg class="arr" id="arrL" viewBox="0 0 34 22"><path d="M0 11 L13 0 v6 h21 v10 h-21 v6 Z"/></svg>
+      <svg class="arr" id="arrR" viewBox="0 0 34 22"><path d="M34 11 L21 0 v6 h-21 v10 h21 v6 Z"/></svg>
+    </div>
+    <div class="topR">
+      <span class="demo" id="demoTag" hidden>DEMO</span>
+      <button class="btn pri" id="doneBtn" type="button" hidden>편집 완료</button>
+      <button class="btn" id="cfgBtn" type="button" aria-label="설정"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>설정</button>
+      <button class="btn" id="fsBtn" type="button" aria-label="전체화면"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>전체화면</button>
+      <button class="btn" id="hudBtn" type="button" aria-label="HUD 좌우반전"><svg viewBox="0 0 24 24"><path d="M3 12h18M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg>HUD</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <section class="side L" id="sideL"></section>
+    <!-- ★566 중앙 칸은 buildCenter()가 통째로 그린다. v3 위젯 개편 전의 숨은 속도계 템플릿(gaugeHost/gears)이 여기 남아
+         spd·prog·needle·ticks·gears id를 중복 선점하는 바람에 getElementById가 '보이지 않는 쪽'을 집어, 속도·바늘·기어가
+         화면에서 영원히 0으로 굳어 있었다(실차 80km/h인데 0 표시). 템플릿 삭제 + render()에 null 가드. -->
+    <section class="side center" id="sideC"></section>
+    <section class="side R" id="sideR"></section>
+  </div>
+
+  <div class="rail">
+    <div class="soc"><span class="bic" id="socIc"></span><div class="bar"><i id="socBar" style="width:0%"></i></div><b id="socV">–<small>%</small></b></div>
+    <div class="chips" id="chips"></div>
+    <div class="range"><span class="bic" id="rangeIc"></span><b id="rangeV">–</b><small>km</small></div>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<div class="sheet" id="sheet" hidden role="dialog" aria-label="클러스터 설정">
+  <div class="shH"><h2 style="margin:0">클러스터 설정</h2></div>
+  <div class="tabs" id="shTabs"><button type="button" data-tab="0" class="on">테마</button><button type="button" data-tab="1">화면</button><button type="button" data-tab="2">위젯</button></div>
+  <div class="shB shBs" id="shBody">
+  <h3>테마 <small>‘주행모드 연동’은 에코·노말·스포츠에 따라 자동 전환 · ‘프리미엄’은 완성차풍 앰버</small></h3>
+  <div class="looks" id="looks"></div>
+  <h3>속도계</h3>
+  <div><span class="seg" id="gaugeSeg"><button type="button" data-gauge="digital">디지털</button><button type="button" data-gauge="analog">아날로그</button></span>
+       <span class="seg" id="maxSeg"><button type="button" data-max="160">160</button><button type="button" data-max="200">200</button><button type="button" data-max="240">240</button></span></div>
+  <h3>전비 단위</h3>
+  <div><span class="seg" id="effSeg"><button type="button" data-eff="kmkwh">km/kWh</button><button type="button" data-eff="100km">kWh/100km</button></span></div>
+  <h3>하단 상태 아이콘</h3>
+  <div class="chipSel" id="chipSel"></div>
+  <h3>위젯 <small>화면을 길게 누르거나 ‘위젯 편집’을 누르면 편집모드로 들어가요</small></h3>
+  <div style="font-size:12px;color:var(--muted);line-height:1.5">편집 모드에서 위젯을 탭하면 선택되고, 모서리를 끌면 크기가·몸통을 끌면 위치가 바뀝니다. 위젯 이름표를 탭하면 항목 변경·삭제, 빈 <b style="color:var(--accent)">+</b> 칸으로 추가할 수 있습니다.</div>
+  </div>
+  <div class="shF"><button class="btn" id="cfgClose" type="button">닫기</button><button class="btn pri" id="editBtn" type="button">위젯 편집</button></div>
+</div>
+
+<!-- ★619 원격 편집 배너(REMOTE 모드) -->
+<div id="remoteBanner" hidden style="position:fixed;top:42px;left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--line);color:var(--muted);padding:8px 12px;border-radius:8px;font-size:11px;z-index:19;text-align:center">
+  원격 편집 — 저장하면 차 릴레이로 전송됩니다 · 표시된 값은 미리보기입니다
+</div>
+
+<div class="pickov" id="pickOv" hidden role="dialog" aria-label="표시 항목 선택">
+  <div class="pickbox">
+    <div class="pickhd"><b id="pickTitle">표시 항목</b><button class="btn" id="pickClose" type="button">닫기</button></div>
+    <div class="picklist" id="pickList"></div>
+  </div>
+</div>
+
+<div class="wact" id="wact" hidden role="dialog" aria-label="위젯 편집">
+  <div class="wbox">
+    <div class="shH wH"><h4 id="wactTitle">위젯</h4></div>
+    <div class="shB wB">
+    <!-- ★직접 조작 편집기(2026-09-28) — 크기·위치는 이제 그리드에서 핸들·드래그로 바꾼다(SIZES 버튼 제거).
+         이 시트는 항목 종류 변경과 삭제만 남긴다. -->
+    <h5 class="wsec">표시 형식</h5>
+    <div class="optrow" id="wFmt"><button type="button" data-fmt="num">숫자</button><button type="button" data-fmt="dial">다이얼</button></div>
+    <h5 class="wsec">크기</h5>
+    <div class="optrow" id="wSize"><button type="button" data-sz="1x1">작게</button><button type="button" data-sz="2x1">가로로 넓게</button><button type="button" data-sz="1x2">세로로 길게</button><button type="button" data-sz="2x2">크게</button></div>
+    <h5 class="wsec">표시 항목 <small>탭하면 바로 바뀝니다</small></h5>
+    <div class="wgrid" id="wPick"></div>
+    </div>
+    <div class="shF wrow">
+      <button type="button" class="danger" id="wDel">삭제</button>
+      <button type="button" id="wClose">닫기</button>
+    </div>
+  </div>
+</div>
+
+<div id="debugLog" hidden style="position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,.9);color:#0f0;font:10px monospace;padding:6px;max-height:120px;overflow-y:auto;z-index:100;line-height:1.3"></div>
+
+<script>
+(function(){
+  var el = function(id){ return document.getElementById(id); };
+  var S = { raw: {} };
+  var lastOk = 0, es = null, editMode = false;
+  var selSide = null, selIdx = -1;   // ★632 직접 조작 편집기 — 현재 선택된 위젯(모서리 핸들 표시 대상)
+  var REMOTE = /(^|[?&])remote=1/.test(location.search);
+  var DEMO = REMOTE || /(^|[?&])demo=1/.test(location.search) || location.protocol === 'file:' || !/^(\d+\.){3}\d+$/.test(location.hostname);
+  var AUTO_EDIT = /(^|[?&])edit=1/.test(location.search);
+  var DEBUG = /(^|[?&])debug=1/.test(location.search);
+
+  var debugLogs = [];
+  function dbg(msg){
+    if (!DEBUG) return;
+    debugLogs.push('[' + new Date().toLocaleTimeString() + '] ' + msg);
+    if (debugLogs.length > 50) debugLogs.shift();
+    var d = el('debugLog'); if (d) d.innerHTML = debugLogs.map(function(l){ return esc(l); }).join('<br>');
+    if (el('debugLog').hidden) el('debugLog').hidden = false;
+    console.log(msg);
+  }
+
+  // 에러 핸들러
+  window.onerror = function(msg, url, line, col, err){
+    dbg('ERROR:' + msg + ' (' + line + ':' + col + ')');
+    if (err) dbg(err.stack);
+  };
+  window.addEventListener('unhandledrejection', function(e){
+    dbg('UNHANDLED:' + (e.reason ? String(e.reason) : 'unknown'));
+  });
+
+  var ICONS = {
+    power:'<path d="M13 2 5 13h6l-1 9 9-12h-6z" fill="currentColor" stroke="none"/>',
+    eff:'<polyline points="2 13 7 13 10 5 14 19 17 13 22 13"/>',
+    temp:'<path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/><circle cx="12" cy="18" r="1.3" fill="currentColor" stroke="none"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
+    soc:'<rect x="2" y="8" width="17" height="9" rx="2"/><rect x="21" y="11" width="2" height="3" rx="1" fill="currentColor" stroke="none"/>',
+    range:'<polygon points="12 3 20 20 12 16 4 20 12 3"/>',
+    avg:'<path d="M4 14a8 8 0 0 1 16 0"/><line x1="12" y1="14" x2="16" y2="9"/><circle cx="12" cy="14" r="1.5" fill="currentColor" stroke="none"/>',
+    odo:'<circle cx="12" cy="12" r="9"/><path d="M12 12 15.5 9"/><path d="M12 6.5v1.4M17.5 12h-1.4M12 17.5v-1.4M6.5 12h1.4"/>',
+    tyres:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.4"/><path d="M12 3v3.6M12 17.4V21M3 12h3.6M17.4 12H21"/>',
+    wind:'<path d="M4 9h9a2.6 2.6 0 1 0-2.6-2.6"/><path d="M4 15h13a2.6 2.6 0 1 1-2.6 2.6"/>',
+    charge:'<rect x="6" y="8" width="12" height="9" rx="2"/><path d="M9 8V5M15 8V5M12 17v3"/><path d="M12.5 10 11 12.5h2L11.5 15"/>',
+    plug:'<path d="M9 7V3M15 7V3M7 7h10v3a5 5 0 0 1-10 0z"/><path d="M12 15v5"/>',
+    steer:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.2"/><path d="M12 14.2V21M4.2 12h5.6M14.2 12h5.6"/>',
+    brake:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
+    dmode:'<line x1="4" y1="8" x2="20" y2="8"/><circle cx="9" cy="8" r="2.2" fill="var(--surface)"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="15" cy="16" r="2.2" fill="var(--surface)"/>',
+    regen:'<rect x="2" y="9" width="14" height="8" rx="2"/><rect x="18" y="11" width="2" height="4" rx="1" fill="currentColor" stroke="none"/><path d="M8.5 10.5 6.5 14h2.6l-1.6 3"/>',
+    cool:'<circle cx="12" cy="12" r="9"/><polyline points="12 7.5 12 12 15 13.5"/>',
+    raw:'<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .8-1 1.7"/><circle cx="12" cy="16.5" r="1" fill="currentColor" stroke="none"/>',
+    // ★632 신규 위젯 — 도어/트렁크, 잠금
+    doors:'<rect x="6" y="2.5" width="12" height="19" rx="1.2"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/>',
+    lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/>',
+    accel:'<rect x="8.4" y="3" width="7.2" height="14" rx="1.8" transform="rotate(14 12 10)"/><path d="M10.2 7.4h4.4M10 10.6h4.4" transform="rotate(14 12 10)"/><path d="M5 21h14"/>',   // ★821 가속 페달
+    trip:'<path d="M4 18c4-10 8 2 16-8"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="10" r="1.6" fill="currentColor" stroke="none"/>',
+    none:''
+  };
+  // ★계기판 표시등(텔테일) — 실차 국제 표준 심볼 형태. 범용 UI 아이콘이 아니라 "차에서 보면 바로 읽히는" 모양으로 직접 작도.
+  //   색은 아래 CSS의 .tl-* 클래스가 규약대로 입힌다(정보=흰색 / 정상=녹색 / 상향등=파랑 / 주의=호박 / 경고=적색).
+  var CHIP_ICONS = {
+    power:'<path d="M12 3.5v8"/><path d="M6.6 6.8a7.5 7.5 0 1 0 10.8 0"/>',
+    // 비상등 = 삼각형 두 겹(실차 심볼)
+    hazard:'<path d="M12 4.2 20.5 19h-17z"/><path d="M12 8.4 16.8 17H7.2z"/>',
+    bsd:'<path d="M3 9.5h8.5v5H3z"/><path d="M15 8.2v7.6M18 6.6v10.8M21 8.6v6.8"/>',
+    // 안전벨트 = 앉은 사람 + 어깨 대각 벨트
+    ac:'<path d="M12 3v18M4.2 7.5 19.8 16.5M19.8 7.5 4.2 16.5"/><path d="M12 6.6 10 4.6M12 6.6l2-2M12 17.4l-2 2M12 17.4l2 2"/>',
+    // 하향등 = 램프 + 아래로 기운 광선 / 상향등 = 램프 + 수평 광선(국제 표준)
+    drl:'<path d="M4.5 5.6a6.4 6.4 0 0 1 0 12.8h1.6a6.4 6.4 0 0 0 0-12.8z"/><path d="M13.4 8.4h6M13.4 12h6.6M13.4 15.6h6"/>',
+    lowbeam:'<path d="M4.5 5.6a6.4 6.4 0 0 1 0 12.8h1.6a6.4 6.4 0 0 0 0-12.8z"/><path d="M13.6 7.6 19.4 6M13.6 11.4l6-1.6M13.6 15.2l5.8-1.6"/>',
+    highbeam:'<path d="M4.5 5.6a6.4 6.4 0 0 1 0 12.8h1.6a6.4 6.4 0 0 0 0-12.8z"/><path d="M13.6 7.4h6.2M13.6 11.4h6.2M13.6 15.4h6.2"/>',
+    // 안개등 = 광선을 가로지르는 물결
+    fog:'<path d="M4.5 5.6a6.4 6.4 0 0 1 0 12.8h1.6a6.4 6.4 0 0 0 0-12.8z"/><path d="M13.4 8.2h6M13.4 12h6M13.4 15.8h6"/><path d="M14.6 6.6c1.4 1.5 3 1.5 4.4 0M14.6 17.4c1.4-1.5 3-1.5 4.4 0"/>',
+    mirror:'<rect x="4" y="7.2" width="16" height="9" rx="4"/><path d="M9 11.7h6"/>',
+    // ★821 브레이크 = 원 + 양옆 괄호(실차 텔테일) / 차폭등 = 바깥을 보는 램프 두 개
+    brake:'<circle cx="12" cy="12" r="5.2"/><path d="M5.6 6.4a8.4 8.4 0 0 0 0 11.2M18.4 6.4a8.4 8.4 0 0 1 0 11.2"/>',
+    side:'<path d="M9.4 7.5a4.5 4.5 0 0 0 0 9z"/><path d="M14.6 7.5a4.5 4.5 0 0 1 0 9z"/><path d="M6.8 9 3.8 8M6.8 12H3.6M6.8 15l-3 1M17.2 9l3-1M17.2 12h3.2M17.2 15l3 1"/>',
+    occupant:'<circle cx="12" cy="6.8" r="2.8"/><path d="M5.8 19.6a6.2 6.2 0 0 1 12.4 0"/>',
+    // ★632 12V 보조배터리 저전압(POWER_LOW_VOLTAGE=1) = 배터리 모양 + 느낌표
+    lowbatt:'<rect x="3" y="8" width="16" height="9" rx="2"/><rect x="20" y="10.5" width="2" height="4" rx="1" fill="currentColor" stroke="none"/><line x1="11" y1="10.3" x2="11" y2="13.3"/><circle cx="11" cy="15.4" r="0.9" fill="currentColor" stroke="none"/>'
+  };
+  function svg(inner){ return inner ? '<svg viewBox="0 0 24 24">' + inner + '</svg>' : ''; }
+  function iconFor(id){
+    if (!id || id === 'none') return ICONS.none;
+    if (id === 'bpow' || id === 'power') return ICONS.power;
+    if (id === 'chgtime') return ICONS.charge;
+    if (id === 'chggun') return ICONS.plug;
+    if (id === 'ptemp' || id === 'actemp') return ICONS.temp;
+    if (id === 'volt' || id === 'cur') return ICONS.charge;
+    if (id === 'pwr') return ICONS.power;
+    if (id === 'jtime') return ICONS.clock;
+    if (id === 'jkm') return ICONS.trip;
+    if (id === 'acmode') return ICONS.wind;
+    if (id === 'brkp') return ICONS.brake;   // ★821 블랙박스 항목
+    if (id === 'sidew') return CHIP_ICONS.side;
+    if (id === 'fogw') return CHIP_ICONS.fog;
+    return ICONS[id] || ICONS.raw;
+  }
+
+  var LOOKS = [
+    { id:'auto',     name:'주행모드 연동', sw:['#0e141a','#5be49b','#ff4d4d'], shape:'classic' },
+    { id:'premium',  name:'프리미엄',   sw:['#0a0a0c','#ffb84d','#e6e6e6'], shape:'elegant' },
+    { id:'graphite', name:'그래파이트', sw:['#0e141a','#4fd6ec','#3ddc97'], shape:'classic' },
+    { id:'eco',      name:'에코',       sw:['#0a1410','#5be49b','#3ddc97'], shape:'classic' },
+    { id:'sport',    name:'스포츠',     sw:['#150b0b','#ff4d4d','#ffb020'], shape:'race' },
+    { id:'ember',    name:'엠버',       sw:['#140f0b','#ff7a3d','#ffd23f'], shape:'classic' },
+    { id:'neon',     name:'네온',       sw:['#0c0a17','#b78cff','#5ef2a8'], shape:'minimal' },
+    { id:'mono',     name:'모노',       sw:['#0a0a0a','#e6e6e6','#8a8a8a'], shape:'classic' }
+  ];
+  // ★2026-09-22 주행모드 표시 — getOperationMode()가 **노말과 에코를 구분하지 못하고 둘 다 1**을 돌려준다(운영자 실측: 노말→'에코'로 표시됨,
+  //   에코→'에코', 스포츠→'스포츠'. 로그 400건 분포 1:104·2:23·3:0). featureId 읽기는 전멸(29개 0값)이라 숫자 해석만으로는 해결 불가.
+  //   운영자 사용 비중이 노말에 크게 쏠려 있어(1이 104/127) 1을 '노말'로 둔다 — 에코 주행 시에는 여전히 틀리게 보인다(한계 명시).
+  //   근본 해결은 릴레이 547의 energy 도메인 이벤트 구독으로 진짜 모드 신호를 찾은 뒤 그 값으로 교체하는 것.
+  // ★567 1=단일 라벨 확정 불가 — 유일 소스 getOperationMode()가 노말·에코 모두 1을 반환한다(841 메모리 실측:
+  //   노말→'에코'오표시·에코→'에코'·스포츠→'스포츠', 로그 400건 분포 1:104·2:23·3:0 — 3=노말은 응답에 아예 없음).
+  //   566에서 1='에코'로 붙였다가 노말 주행 중 '에코'로 뜬다는 재신고로 확정: 어느 쪽 라벨을 못박아도 절반은 틀린다.
+  //   소프트웨어로 구분 불가한 값에 확정 라벨을 붙이지 않고 있는 그대로 보여준다.
+  var DMODE = { 1:'에코/노말', 2:'스포츠', 3:'노말' };
+  function raw(k){ return S.raw ? S.raw[k] : undefined; }
+  function enumTxt(map, v){ v = num(v); return v === null ? null : (map[v] || String(v)); }
+  // ★632 전비 단위 토글 — 레이아웃(CFG/릴레이)과 무관하게 이 화면(브라우저)에만 남는 개인 취향이라 localStorage 단독 보관.
+  var EFFUNIT = 'kmkwh';
+  try { var _eu = localStorage.getItem('lk_cluster_effunit'); if (_eu === 'kmkwh' || _eu === '100km') EFFUNIT = _eu; } catch(e){}
+  function setEffUnit(u){ EFFUNIT = u; try { localStorage.setItem('lk_cluster_effunit', u); } catch(e){} }
+  function effUnitLabel(){ return EFFUNIT === '100km' ? 'kWh/100km' : 'km/kWh'; }
+  // trip_eff·trip_inst = "kWh/100km×10" 정수(=Wh/km 그대로). inst는 회생 시 음수·주차 시 -10 같은 값이 온다.
+  function fmtEffVal(rawV, isInst){
+    if (rawV === null) return null;
+    if (rawV <= 0) return isInst ? '회생' : null;   // 평균(eff)은 0 이하면 데이터 없음으로 취급
+    var val = EFFUNIT === '100km' ? (rawV / 10) : (1000 / rawV);
+    return val > 99.9 ? '99+' : val.toFixed(1);
+  }
+  var METRICS = {
+    spd:   { k:'속도계',        unit:'', gauge:true },  // ★가운데 칸용 — 렌더링은 특별 처리
+    // ★632 버그수정: trip_speed(=현재 속도)가 아니라 trip_avg_spd(평균 속도)를 써야 한다
+    avg:   { k:'평균 속도',     unit:'km/h', dial:{min:0,max:160}, get:function(s){ return num(s.trip_avg_spd); } },
+    eff:   { k:'평균 전비',     unit:effUnitLabel, dial:function(){ return EFFUNIT === '100km' ? {min:0,max:30} : {min:0,max:12}; }, get:function(s){ return fmtEffVal(num(s.trip_eff), false); } },
+    // ★573 순간 전비(운영자 요청) — 릴레이가 이미 `trip_inst`로 올리고 있는데 클러스터만 안 쓰고 있었다.
+    //   회생 중엔 음수로 온다(실측 -10). 평균 전비(eff)와 나란히 두면 지금 주행이 평균보다 나은지 바로 보인다.
+    inst:  { k:'순간 전비',     unit:effUnitLabel, dial:function(){ return EFFUNIT === '100km' ? {min:0,max:40} : {min:0,max:12}; }, get:function(s){ return fmtEffVal(num(s.trip_inst), true); } },
+    range: { k:'주행가능 거리', unit:'km',   dial:{min:0,max:600}, get:function(s){ var v = num(s.range_km); return v !== null ? v : num(raw('setting:SET_ELECTRIC_RANGE')); } },
+    odo:   { k:'누적 주행',     unit:'km',   get:function(s){ var v = num(s.trip_odo); return v === null ? null : v.toLocaleString(); } },
+    // ★632 이번 주행 거리·시간(신규, 릴레이 632). jkm=km×10 정수. jtime은 단위 실측 대기 — 숫자를 그대로 '분'으로 표기.
+    jkm:   { k:'이번 주행 거리', unit:'km',  get:function(s){ var v = num(s.trip_jkm); return v === null ? null : (v / 10).toFixed(1); } },
+    jtime: { k:'이번 주행 시간', unit:'분',  get:function(s){ return num(s.trip_jtime); } },
+    temp:  { k:'외기',          unit:'°C',   dial:{min:-10,max:45}, get:function(s){ return num(s.out_temp); } },
+    clock: { k:'시계',          unit:'',     get:function(){ var d = new Date(); return d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0'); } },
+    soc:   { k:'배터리',        unit:'%',    dial:{min:0,max:100}, get:function(s){ return num(s.trip_soc); } },
+    chgtime:{ k:'완충 예상',    unit:'', txt:true, get:function(){ var h = num(raw('charging:CHARGING_FULL_REST_HOUR')), m = num(raw('charging:CHARGING_FULL_REST_MINUTE')); if (h === null && m === null) return null; return (h || 0) + '시간 ' + (m || 0) + '분'; } },
+    chggun:{ k:'충전 연결',     unit:'', txt:true, get:function(){ return enumTxt({ 0:'해제', 1:'연결', 2:'연결' }, raw('charging:CHARGING_GUN_CONNECT_STATE')); } },
+    volt:  { k:'배터리 전압',   unit:'V',    dial:{min:200,max:500}, get:function(){ return num(raw('charging:CHARGING_CHARGE_BATTERY_VOLT')); } },
+    cur:   { k:'충전 전류',     unit:'A',    dial:{min:0,max:200}, get:function(){ return num(raw('charging:CHARGING_CHARGE_CURRENT')); } },
+    ptemp: { k:'충전구 온도',   unit:'°C',   dial:{min:0,max:80}, get:function(){ return num(raw('charging:CHARGING_PORT_TEMP')); } },
+    // ★632 파워 흐름(신규) — raw 배터리 파워 키. 단위·부호는 CLUSTER-DESIGN.md §7-5 미확정 항목이라 kW로 가정 표기(실측 대기).
+    pwr:   { k:'파워 흐름(순간 전력)', unit:'', pwr:true, dial:true },
+    tyres: { k:'타이어 공기압·온도', unit:'', tyres:true },
+    // ★632 도어/트렁크(신규) — door_driver·door_rf·door_lr·door_rr·door_trunk(0/1, 1=열림)
+    doors: { k:'도어·트렁크',   unit:'', doors:true },
+    lock:  { k:'잠금 상태',     unit:'', txt:true, get:function(s){ var v = num(s.lock); return v === null ? null : (v === 1 ? '잠김' : '열림'); } },
+    // ★632 공조 설정온도(ac_temp_raw=℃×2 확정 — PROTOCOL.md/AcScreen.kt) · 공조 모드(ac_start_st로 켜짐 판정 후 ac_work_mode 1=송풍/2=에어컨)
+    actemp:{ k:'공조 설정온도', unit:'°C',   dial:{min:16,max:32}, get:function(s){ var v = num(s.ac_temp_raw); return v === null ? null : v / 2; } },
+    acmode:{ k:'공조 모드',     unit:'', txt:true, get:function(s){ if (num(s.ac_start_st) !== 1) return '꺼짐'; var wm = num(s.ac_work_mode); return wm === 2 ? '에어컨' : (wm === 1 ? '송풍' : '켜짐'); } },
+    dmode: { k:'주행 모드',     unit:'', txt:true, get:function(s){ return enumTxt(DMODE, s.drive_mode_get); } },
+    regen: { k:'회생 제동',     unit:'', txt:true, get:function(s){ return enumTxt({2:'표준',3:'강'}, s.regen); } },
+    steer: { k:'스티어링',      unit:'', txt:true, get:function(s){ return enumTxt({1:'컴포트',2:'스포츠'}, s.steer_mode); } },
+    brake: { k:'브레이크 감각', unit:'', txt:true, get:function(s){ return enumTxt({2:'컴포트',0:'스포츠'}, s.brake_mode); } },
+    // ★665 조명·경고 상태(신규) — 하단 상태 아이콘과 같은 값(relay_state 우선, raw 폴백). 차종이 안 주면 '–'.
+    hbeam: { k:'상향등',        unit:'', txt:true, get:function(s){ var v = num(s.high_beam); if (v === null) v = num(raw('light:LIGHT_HIGH_BEAM_LIGHT')); return v === null ? null : (v === 1 ? '켜짐' : '꺼짐'); } },
+    lbeam: { k:'하향등',        unit:'', txt:true, get:function(s){ var v = num(s.low_beam); if (v === null) v = num(raw('light:LIGHT_LOW_BEAM_LIGHT')); return v === null ? null : (v === 1 ? '켜짐' : '꺼짐'); } },
+    drlw:  { k:'주간주행등',    unit:'', txt:true, get:function(s){ var v = num(s.drl); return v === null ? null : (v === 1 ? '켜짐' : '꺼짐'); } },
+    hazw:  { k:'비상등',        unit:'', txt:true, get:function(s){ var v = num(s.hazard); return v === null ? null : (v === 1 ? '켜짐' : '꺼짐'); } },
+    // ★821 순정 블랙박스와 같은 값(릴레이 821~)
+    sidew: { k:'차폭등',        unit:'', txt:true, get:function(s){ var v = num(s.side_light); return v === null ? null : (v === 1 ? '켜짐' : '꺼짐'); } },
+    fogw:  { k:'뒤 안개등',     unit:'', txt:true, get:function(s){ var v = num(s.rear_fog); return v === null ? null : (v === 1 ? '켜짐' : '꺼짐'); } },
+    accel: { k:'가속 페달',     unit:'%',    dial:{min:0,max:100}, get:function(s){ return num(s.accel_pct); } },
+    brkp:  { k:'브레이크 페달', unit:'', txt:true, get:function(s){ var v = num(s.brake_pedal); return v === null ? null : (v === 1 ? '밟음' : '뗌'); } },
+    wind:  { k:'공조 풍량',     unit:'단',   dial:{min:0,max:7}, get:function(s){ return num(s.ac_wind); } },
+    cool:  { k:'공조 남은 시간', unit:'분',  get:function(s){ return num(s.cool_min); } }
+  };
+  var PICK_GROUPS = [
+    ['주행', ['avg','eff','inst','range','odo','jkm','jtime','pwr','temp','clock','accel','brkp']],
+    ['배터리·충전', ['soc','chgtime','chggun','volt','cur','ptemp']],
+    ['차량', ['tyres','doors','lock','actemp','acmode','dmode','regen','steer','brake','wind','cool']],
+    ['조명·경고', ['hbeam','lbeam','drlw','hazw','sidew','fogw']]
+  ];
+  var TYRE = [['LF','앞좌'],['RF','앞우'],['LB','뒤좌'],['RB','뒤우']];
+  var DOORS = [['door_driver','운전'],['door_rf','조수'],['door_lr','뒷좌'],['door_rr','뒷우'],['door_trunk','트렁크']];
+  var CHIPS = { power:'시동', hazard:'비상등', bsd:'사각지대', ac:'공조', drl:'DRL', lowbeam:'하향등', highbeam:'상향등', fog:'뒤 안개등', side:'차폭등', brake:'브레이크', mirror:'미러', occupant:'탑승',
+    // ★632 12V 저전압(power:POWER_LOW_VOLTAGE) — 확실한 키가 있을 때만 추가. 백스톱 폴 없이 이벤트로만 채워져 기본 칩엔 넣지 않고 선택 항목으로만 둔다.
+    lowbatt:'12V 저전압' };
+  var DEF = { look:'auto', shape:'classic', gauge:'digital', max:160, chips:['power','hazard','bsd','ac','lowbeam'],
+    center: [{m:'spd',w:2,h:2}],  // ★기본: 속도계 가운데 배치
+    left:  [{m:'tyres',w:2,h:2},{m:'soc',w:2,h:1},{m:'eff',w:1,h:1},{m:'avg',w:1,h:1}],
+    right: [{m:'dmode',w:2,h:1},{m:'temp',w:1,h:1},{m:'clock',w:1,h:1},{m:'range',w:2,h:1},{m:'chggun',w:1,h:1},{m:'ptemp',w:1,h:1}] };
+  // ★632 직접 조작 편집기 — 섹션은 COLS(2)열 고정 그리드. 각 위젯은 {m,x,y,w,h}(그리드 좌표)로 배치한다.
+  var COLS = 2;
+  function occupied(placed, x, y, w, h){
+    for (var i = 0; i < placed.length; i++){
+      var o = placed[i];
+      if (x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y) return true;
+    }
+    return false;
+  }
+  function firstFit(placed, w, h){
+    for (var y = 0; y < 40; y++){
+      for (var x = 0; x <= COLS - w; x++){
+        if (!occupied(placed, x, y, w, h)) return { x:x, y:y };
+      }
+    }
+    return { x:0, y:40 };
+  }
+  function rowsNeeded(arr){
+    var r = 2;
+    arr.forEach(function(w){ r = Math.max(r, (w.y || 0) + (w.h || 1)); });
+    return r;
+  }
+  // ★632 저장된 옛 {m,w,h}(좌표 없음)는 첫 빈 칸부터 채워 넣고, 이미 {x,y}가 있으면 겹치지 않는 한 그대로 존중한다.
+  //   center의 spd는 2×2 크기 고정·삭제 불가 — 레이아웃에 없으면 자동 추가. 위치는 위·아래로 옮길 수 있다(운영자 09-28, 저장된 y 존중).
+  function normSection(arr, isCenter){
+    arr = (arr || []).map(function(w){
+      return { m:w.m, w:(w.w === 2 ? 2 : 1), h:(w.h === 2 ? 2 : 1), s:(w.s === 'dial' ? 'dial' : undefined),
+               x:(typeof w.x === 'number' ? w.x : undefined), y:(typeof w.y === 'number' ? w.y : undefined) };
+    });
+    var placed = [];
+    if (isCenter){
+      var si = -1;
+      for (var i = 0; i < arr.length; i++) if (arr[i].m === 'spd'){ si = i; break; }
+      var spdW = si >= 0 ? arr.splice(si, 1)[0] : { m:'spd' };
+      spdW.x = 0; spdW.y = (typeof spdW.y === 'number' && spdW.y >= 0) ? spdW.y : 0; spdW.w = 2; spdW.h = 2;
+      placed.push(spdW);
+    }
+    arr.forEach(function(w){
+      if (typeof w.x === 'number' && typeof w.y === 'number' && w.x >= 0 && w.y >= 0 && w.x + w.w <= COLS && !occupied(placed, w.x, w.y, w.w, w.h)){
+        placed.push(w);
+      } else {
+        var p = firstFit(placed, w.w, w.h);
+        w.x = p.x; w.y = p.y;
+        placed.push(w);
+      }
+    });
+    return placed;
+  }
+  // ★619 레이아웃 릴레이 저장 — 버전 3 로더를 함수화해서 복수 경로(localStorage/릴레이/LK_init)에서 재사용
+  function fromLayout(o){
+    if (!o) o = DEF;
+    return { look:o.look||DEF.look, shape:o.shape||DEF.shape, gauge:o.gauge||DEF.gauge, max:o.max||DEF.max, chips:o.chips||DEF.chips,
+             center: normSection((o.center && o.center.length) ? o.center : DEF.center, true),
+             left:  normSection((o.left && o.left.length) ? o.left : DEF.left, false),
+             right: normSection((o.right && o.right.length) ? o.right : DEF.right, false) };
+  }
+  var CFG = fromLayout(null);
+  var hadLocal = false;
+  try {
+    // 버전 3: center 필드 + shape
+    var r0 = localStorage.getItem('lk_cluster_cfg3');
+    if (r0) {
+      var o = JSON.parse(r0);
+      CFG = fromLayout(o);
+      hadLocal = true;
+    } else {
+      // 이전 v2 마이그레이션
+      var r1 = localStorage.getItem('lk_cluster_cfg2');
+      if (r1) {
+        var o = JSON.parse(r1);
+        CFG = fromLayout(o);
+        hadLocal = true;
+        dbg('MIGRATE: v2→v3 center=' + JSON.stringify(CFG.center));
+      }
+    }
+  } catch(e){ dbg('CONFIG LOAD ERROR: ' + e.message); }
+  // ★619 릴레이 명령 발송(LAN만)
+  function relayCmd(action, params){
+    return fetch('/cmd', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:action,params:params}) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ if (!j || !j.ok) throw new Error(j && j.result ? j.result : 'relay error'); return j; });
+  }
+  function save(){
+    try {
+      localStorage.setItem('lk_cluster_cfg3', JSON.stringify(CFG));
+      dbg('CONFIG SAVED: v3');
+    } catch(e){ dbg('CONFIG SAVE ERROR: ' + e.message); }
+    // ★619 릴레이 저장 — LAN은 POST, REMOTE는 webkit 브릿지
+    if (REMOTE) window.lkPost({type:'layout', layout:CFG});
+    else relayCmd('CLUSTERCFG', {layout:CFG}).catch(function(){ toast('릴레이 저장 실패'); });
+  }
+  function metricLabel(id){ if (!id || id === 'none') return '(비움)'; return (METRICS[id] || {}).k || id; }
+
+  function applyLook(){
+    var look = CFG.look, shape = CFG.shape;
+    if (look === 'auto'){ var m = num(S.drive_mode_get); look = m === 1 ? 'eco' : (m === 2 ? 'sport' : 'graphite'); }
+    // 자동 look 변경 시 기본 shape 추가
+    var lookObj = LOOKS.find(function(l){ return l.id === look; });
+    if (lookObj && lookObj.shape) shape = lookObj.shape;
+    if (document.documentElement.getAttribute('data-look') !== look) document.documentElement.setAttribute('data-look', look);
+    if (document.documentElement.getAttribute('data-shape') !== shape) document.documentElement.setAttribute('data-shape', shape);
+    document.documentElement.setAttribute('data-gauge', CFG.gauge);
+    el('modeTxt').textContent = (enumTxt(DMODE, S.drive_mode_get) || '').toUpperCase();
+  }
+
+  function ticks(){
+    var g = el('ticks'); if (!g) return;   // ★566 속도계 위젯을 뺀 레이아웃이면 눈금판 자체가 없다
+    var cx = 150, cy = 150, r = 114, html = '', MAX = CFG.max, step = MAX > 200 ? 30 : 20, lab = MAX > 200 ? 60 : 40;
+    for (var v = 0; v <= MAX; v += step){
+      var a = Math.PI - (v / MAX) * Math.PI, maj = (v % lab === 0);
+      var r1 = r - 8, r2 = r - (maj ? 18 : 13);
+      html += '<line class="tk' + (maj ? ' maj' : '') + '" x1="' + (cx + r1*Math.cos(a)).toFixed(1) + '" y1="' + (cy - r1*Math.sin(a)).toFixed(1) +
+              '" x2="' + (cx + r2*Math.cos(a)).toFixed(1) + '" y2="' + (cy - r2*Math.sin(a)).toFixed(1) + '"/>';
+      if (maj){ var rt = r + 20; html += '<text x="' + (cx + rt*Math.cos(a)).toFixed(1) + '" y="' + (cy - rt*Math.sin(a) + 4).toFixed(1) + '">' + v + '</text>'; }
+    }
+    g.innerHTML = html;
+  }
+
+  function num(v, d){ var na = (d === undefined ? null : d); if (v === undefined || v === null || v === '') return na; v = Number(v); if (!isFinite(v) || Math.abs(v) >= 1e9 || v === -10011 || v === -10012 || v === -10013) return na; return v; }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  // ★665 다이얼 — 반원 호 + 바늘. range={min,max}(또는 함수), bidir=중앙(0)에서 좌우로 뻗는 호(파워 흐름)
+  function dialHtml(val, unitTxt, range, bidir){
+    var lo = range.min, hi = range.max, pct = Math.max(0, Math.min(1, (val - lo) / (hi - lo || 1)));
+    var d = 'M10 54 A40 40 0 0 1 90 54';
+    var prog;
+    if (bidir){
+      var half = Math.abs(pct - 0.5) * 100;
+      prog = pct >= 0.5 ? '0 50 ' + half.toFixed(1) + ' 100' : (50 - half).toFixed(1) + ' ' + half.toFixed(1) + ' 0 100';
+    } else prog = (pct * 100).toFixed(1) + ' 100';
+    var ang = -90 + pct * 180;
+    var txt = Math.abs(val) >= 100 ? Math.round(val) : (Math.round(val * 10) / 10);
+    return '<svg viewBox="0 0 100 64" preserveAspectRatio="xMidYMid meet"><path class="dl-track" d="' + d + '" pathLength="100"/>' +
+      '<path class="dl-prog' + (bidir && pct < 0.5 ? ' neg' : '') + '" d="' + d + '" pathLength="100" stroke-dasharray="' + prog + '"/>' +
+      '<line class="dl-needle" x1="50" y1="54" x2="50" y2="22" transform="rotate(' + ang.toFixed(1) + ' 50 54)"/>' +
+      '<text class="dl-val" x="50" y="62">' + esc(String(txt)) + '</text>' + (unitTxt ? '<text class="dl-unit" x="50" y="44">' + esc(unitTxt) + '</text>' : '') + '</svg>';
+  }
+  function dialRange(m){ return typeof m.dial === 'function' ? m.dial() : m.dial; }
+  function widgetInner(id, style){
+    var m = METRICS[id];
+    if (!m) return { icon: ICONS.none, v: '', cls: '' };
+    if (m.tyres){
+      var h = '<div class="tyres">';
+      TYRE.forEach(function(t){
+        var p = raw('instrument:I_2IN1_' + t[0] + '_TYRE_PRESSURE'), tp = raw('instrument:I_2IN1_' + t[0] + '_TYRE_TEMPERATURE');
+        // 타이어 압력 = psi×10 원시값(로그분석 09-18 확정: 413=41.3psi) → ÷10해서 psi로 표시
+        if (p === undefined && tp === undefined) h += '<span><i>' + t[1] + '</i><i>–</i></span>';
+        else h += '<span><i>' + t[1] + '</i>' + (p === undefined ? '–' : esc((Number(p) / 10).toFixed(1))) + '<i>' + (tp === undefined ? '' : esc(tp) + '°') + '</i></span>';
+      });
+      return { icon: iconFor('tyres'), v: h + '</div>', cls: 'txt' };
+    }
+    // ★632 도어·트렁크 — door_driver·door_rf·door_lr·door_rr·door_trunk(0/1, 1=열림). ★상태 갱신이 stateSet이 아니라
+    //   state.put이라 SSE 실시간 푸시는 안 되고 접속 스냅샷·폴링 폴백(최대 ~1.5초 지연)에서만 최신화된다(Java 미수정, 한계로 보고).
+    if (m.doors){
+      var hd = '<div class="tyres">';
+      DOORS.forEach(function(d){
+        var v = num(S[d[0]]);
+        hd += '<span><i>' + d[1] + '</i>' + (v === null ? '–' : (v === 1 ? '열림' : '닫힘')) + '</span>';
+      });
+      return { icon: iconFor('doors'), v: hd + '</div>', cls: 'txt' };
+    }
+    // ★632 파워 흐름 — 값이 있으면 중앙(0)에서 좌(회생·초록)/우(소비·강조색)로 뻗는 막대
+    if (m.pwr){
+      var pv = num(raw('bodywork:BODYWORK_BATTERY_POWER'));
+      if (pv === null) return { icon: iconFor('pwr'), v: '–', cls: '' };
+      if (style === 'dial') return { icon: iconFor('pwr'), v: dialHtml(pv, 'kW', { min:-60, max:120 }, true), cls: 'dialv' };
+      var half = Math.round(Math.min(1, Math.abs(pv) / 60) * 50);
+      var barHtml = '<div style="position:relative;height:5px;border-radius:99px;background:var(--surface2);overflow:hidden;margin-top:4px">' +
+        '<div style="position:absolute;top:0;bottom:0;' + (pv < 0 ? 'right:50%' : 'left:50%') + ';width:' + half + '%;background:' + (pv < 0 ? 'var(--green)' : 'var(--accent)') + ';border-radius:99px"></div></div>';
+      return { icon: iconFor('pwr'), v: (pv > 0 ? '+' : '') + pv + '<small>kW</small>' + barHtml, cls: pv < 0 ? 'regen' : '' };
+    }
+    var v = m.get(S);
+    var unit = typeof m.unit === 'function' ? m.unit() : m.unit;
+    if (style === 'dial' && m.dial && v !== null && v !== '회생'){
+      var nv = parseFloat(String(v).replace(/,/g, ''));
+      if (!isNaN(nv)) return { icon: iconFor(id), v: dialHtml(nv, unit, dialRange(m), false), cls: 'dialv' };
+    }
+    var showUnit = unit && v !== '회생';
+    return { icon: iconFor(id), v: (v === null ? '–' : esc(v)) + (showUnit ? '<small>' + unit + '</small>' : ''),
+             cls: (m.txt ? 'txt' : '') + (id === 'power' && typeof v === 'number' && v < 0 ? ' regen' : '') + (v === '회생' ? ' regen' : '') };
+  }
+  function widgetStyle(w){ return 'grid-column:' + (w.x + 1) + '/span ' + w.w + ';grid-row:' + (w.y + 1) + '/span ' + w.h + ';'; }
+  function handlesHtml(){ return '<div class="rh" data-corner="nw"></div><div class="rh" data-corner="ne"></div><div class="rh" data-corner="sw"></div><div class="rh" data-corner="se"></div>'; }
+  function buildSide(sideId, arr){
+    var host = el(sideId), html = '';
+    var rows = rowsNeeded(arr), addPos = null;
+    if (editMode){ addPos = firstFit(arr, 1, 1); }   // ★편집 화면=실제 화면(줄 수 동일) — 빈칸 없으면 +는 모서리 떠있는 버튼
+    host.style.gridTemplateRows = 'repeat(' + rows + ',1fr)';
+    arr.forEach(function(w, i){
+      var t = widgetInner(w.m, w.s);
+      html += '<div class="w' + (w.w === 2 ? ' w2' : '') + (w.h === 2 ? ' h2' : '') + (editMode ? ' editing' : '') + '" data-side="' + sideId + '" data-idx="' + i + '" style="' + widgetStyle(w) + '">' +
+              '<div class="ic">' + svg(t.icon) + '</div><div class="v ' + t.cls + '">' + t.v + '</div>' +
+              (editMode ? '<div class="edit-badge"><b>' + esc(metricLabel(w.m)) + '</b></div>' + handlesHtml() : '') + '</div>';
+    });
+    if (editMode && addPos) html += '<div class="w add' + (addPos.y >= rows ? ' float' : '') + '" data-add="' + sideId + '" style="' + (addPos.y >= rows ? '' : 'grid-column:' + (addPos.x + 1) + '/span 1;grid-row:' + (addPos.y + 1) + '/span 1') + '"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>';
+    var frag = document.createElement('div'); frag.innerHTML = html;
+    host.querySelectorAll('.w').forEach(function(n){ n.remove(); });
+    while (frag.firstChild) host.appendChild(frag.firstChild);
+  }
+  function buildCenter(arr){
+    var host = el('sideC'), html = '';
+    var rows = rowsNeeded(arr), addPos = null;
+    if (editMode){ addPos = firstFit(arr, 1, 1); }   // ★편집 화면=실제 화면(줄 수 동일) — 빈칸 없으면 +는 모서리 떠있는 버튼
+    host.style.gridTemplateRows = 'repeat(' + rows + ',1fr)';
+    arr.forEach(function(w, i){
+      if (w.m === 'spd'){
+        // 속도계 위젯: 특별 처리(gauge+readout+gears) — 2×2 고정, 핸들 없음(삭제·크기 불가, 위·아래 이동만)
+        html += '<div class="w spdw' + (editMode ? ' editing' : '') + '" data-side="sideC" data-idx="' + i + '" style="position:relative;overflow:visible;' + widgetStyle(w) + '">' +
+                '<div class="gauge" style="flex:1;position:relative"><svg viewBox="0 0 300 168" preserveAspectRatio="xMidYMax meet" aria-hidden="true" style="position:absolute;inset:0;width:100%;height:100%">' +
+                '<path class="track" d="M36 150 A114 114 0 0 1 264 150"/>' +
+                '<path class="prog" id="prog" pathLength="100" stroke-dasharray="0 100" d="M36 150 A114 114 0 0 1 264 150"/>' +
+                '<g id="ticks"></g><line class="needle" id="needle" x1="88" y1="150" x2="44" y2="150"/>' +
+                '</svg><div class="readout"><div class="spd" id="spd">0</div><div class="unit">km/h</div></div></div>' +
+                '<div class="gears" id="gears"><span data-g="P">P</span><span data-g="R">R</span><span data-g="N">N</span><span data-g="D">D</span></div>' +
+                (editMode ? '<div class="edit-badge"><b>속도계 ↕</b></div>' : '') + '</div>';
+      } else {
+        // 일반 위젯
+        var t = widgetInner(w.m, w.s);
+        html += '<div class="w' + (w.w === 2 ? ' w2' : '') + (w.h === 2 ? ' h2' : '') + (editMode ? ' editing' : '') + '" data-side="sideC" data-idx="' + i + '" style="' + widgetStyle(w) + '">' +
+                '<div class="ic">' + svg(t.icon) + '</div><div class="v ' + t.cls + '">' + t.v + '</div>' +
+                (editMode ? '<div class="edit-badge"><b>' + esc(metricLabel(w.m)) + '</b></div>' + handlesHtml() : '') + '</div>';
+      }
+    });
+    if (editMode && addPos) html += '<div class="w add' + (addPos.y >= rows ? ' float' : '') + '" data-add="sideC" style="' + (addPos.y >= rows ? '' : 'grid-column:' + (addPos.x + 1) + '/span 1;grid-row:' + (addPos.y + 1) + '/span 1') + '"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>';
+    // 기존 gauge/gears 제거 후 신규 위젯으로 교체
+    var frag = document.createElement('div'); frag.innerHTML = html;
+    host.querySelectorAll('.w').forEach(function(n){ n.remove(); });
+    while (frag.firstChild) host.insertBefore(frag.firstChild, null);
+  }
+  // ★632 선택 표시는 DOM 재생성 없이 클래스만 토글(드래그 중 포인터 캡처가 끊기지 않도록)
+  function setSelClass(){
+    document.querySelectorAll('.w.sel').forEach(function(n){ n.classList.remove('sel'); });
+    if (selSide && selIdx >= 0){ var host = el(selSide), n = host && host.querySelector('.w[data-idx="' + selIdx + '"]'); if (n) n.classList.add('sel'); }
+  }
+  function selectW(sid, idx){ selSide = sid; selIdx = idx; setSelClass(); }
+  function deselectW(){ selSide = null; selIdx = -1; setSelClass(); }
+  function renderSides(){ buildSide('sideL', CFG.left); buildSide('sideR', CFG.right); buildCenter(CFG.center); if (editMode) setSelClass(); }
+  // ★569 칸→배열 매핑 공통화 — 종전엔 세 곳이 각자 `sideL이면 left 아니면 right`라 **중앙(sideC)이 전부 오른쪽으로 샜다**.
+  //   그래서 중앙에서 +를 누르면 오른쪽에 추가되고, 중앙 위젯을 편집·삭제하면 오른쪽 것이 바뀌었다.
+  function arrFor(sid){ return sid === 'sideL' ? CFG.left : sid === 'sideC' ? CFG.center : CFG.right; }
+  function refreshValues(){
+    // ★569 중앙 포함 — 종전엔 좌·우만 돌아 중앙에 올린 위젯 값이 한 번 그려진 뒤 영영 갱신되지 않았다
+    //   (속도계는 render()가 직접 갱신해서 티가 안 났다).
+    //   ★★순서 주의: **.v 확인을 widgetInner()보다 먼저** 해야 한다. 속도계(spd) 위젯은 METRICS에 get이 없어
+    //   widgetInner('spd')가 `m.get is not a function`으로 터진다. 중앙엔 그 spd가 늘 있으므로, 순서를 뒤집으면
+    //   1초마다 예외가 나 갱신 루프가 죽는다(헤드리스 실측으로 잡음 — 중앙 추가 당시 이 순서로 회귀 발생).
+    ['sideL','sideC','sideR'].forEach(function(sid){
+      var arr = arrFor(sid);
+      el(sid).querySelectorAll('.w:not(.add)').forEach(function(n){
+        var i = +n.getAttribute('data-idx'); if (!arr[i]) return;
+        var ve = n.querySelector('.v'); if (!ve) return;   // 게이지(속도계)엔 .v가 없다 → 값 갱신 대상 아님
+        var t = widgetInner(arr[i].m, arr[i].s);
+        ve.className = 'v ' + t.cls; ve.innerHTML = t.v;
+      });
+    });
+  }
+
+  function chip(iconKey, val, cls){ return '<div class="chip ' + (cls||'') + '">' + svg(CHIP_ICONS[iconKey] || '') + (val != null && val !== '' ? '<b>' + val + '</b>' : '') + '</div>'; }
+
+  function render(){
+    var s = S, MAX = CFG.max;
+    applyLook();
+    // ★566 속도계는 중앙 위젯으로만 존재한다 — 편집기에서 'spd'를 빼면 아래 엘리먼트가 통째로 없다.
+    //   가드 없이 접근하면 TypeError로 render() 전체가 멈춰(554 wChange 사고와 동일) 화면이 죽는다.
+    var sp = num(s.speed, 0);
+    var eSpd = el('spd'), eProg = el('prog'), eNeedle = el('needle'), eGears = el('gears');
+    if (eSpd) eSpd.textContent = Math.round(sp);
+    var pct = Math.max(0, Math.min(1, sp / MAX));
+    if (eProg) eProg.setAttribute('stroke-dasharray', (pct * 100).toFixed(1) + ' 100');
+    if (eNeedle) eNeedle.style.transform = 'rotate(' + (pct * 180).toFixed(1) + 'deg)';
+
+    var map = { 1:'R', 2:'D', 3:'P' }, cur = map[num(s.gear)] || '';
+    var gs = eGears ? eGears.children : [];
+    for (var i = 0; i < gs.length; i++) gs[i].classList.toggle('on', gs[i].getAttribute('data-g') === cur);
+
+    var soc = num(s.trip_soc);
+    if (soc !== null){
+      el('socV').innerHTML = soc + '<small>%</small>';
+      var b = el('socBar'); b.style.width = Math.max(0, Math.min(100, soc)) + '%';
+      b.className = soc <= 10 ? 'crit' : (soc <= 20 ? 'low' : '');
+    }
+    var rg = METRICS.range.get(s); el('rangeV').textContent = rg === null ? '–' : rg;
+    if (!editMode) refreshValues();
+
+    var tf = num(s.turnflash, 1);
+    var L = (tf & 2) !== 0, R = (tf & 4) !== 0;
+    el('arrL').classList.toggle('on', L); el('arrR').classList.toggle('on', R);
+
+    var c = CFG.chips, out = '';
+    if (c.indexOf('power') >= 0 && num(s.power_level) === 2) out += chip('power', null, 'on');   // 꺼짐은 아예 렌더 안 함(실차 텔테일)
+    if (c.indexOf('hazard') >= 0 && num(s.hazard) === 1) out += chip('hazard', null, 'warn blink');   // 비상등만 실제 점멸
+    if (c.indexOf('bsd') >= 0) { if (num(s.bsd_state) === 2) out += chip('bsd', null, 'alert'); else if (num(s.bsd_state) === 1) out += chip('bsd', null, 'on'); }
+    if (c.indexOf('ac') >= 0 && num(s.ac_start_st) === 1) out += chip('ac', num(s.ac_wind) !== null ? num(s.ac_wind) : null, 'on');
+    if (c.indexOf('drl') >= 0 && num(s.drl) === 1) out += chip('drl', null, 'info');   // 주간주행등=정보(흰색)
+    // ★821 순정 블랙박스와 같은 값(릴레이 821~): 차폭등 light.getLightStatus(1) · 뒤 안개등 getLightStatus(7) · 브레이크 SET_VCU_BREAK_PEDAL_STATS_S
+    if (c.indexOf('side') >= 0 && num(s.side_light) === 1) out += chip('side', null, 'on');
+    if (c.indexOf('fog') >= 0 && num(s.rear_fog) === 1) out += chip('fog', null, 'warn');
+    if (c.indexOf('brake') >= 0 && num(s.brake_pedal) === 1) out += chip('brake', null, 'alert');
+    // ★하향등: raw(인메모리·LAN전용)는 실차에서 값이 안 왔다(운영자 '켜도 안 됨') → relay_state 우선, raw는 폴백.
+    //   상향등은 키 자체가 없었다 → 신규. 국제 표준대로 상향등만 파란색(.beam).
+    var _lb = num(s.low_beam); if (_lb === null) _lb = num(raw('light:LIGHT_LOW_BEAM_LIGHT'));
+    var _hb = num(s.high_beam); if (_hb === null) _hb = num(raw('light:LIGHT_HIGH_BEAM_LIGHT'));
+    if (c.indexOf('lowbeam') >= 0 && _lb === 1) out += chip('lowbeam', null, 'on');
+    if (c.indexOf('highbeam') >= 0 && _hb === 1) out += chip('highbeam', null, 'beam');
+    if (c.indexOf('mirror') >= 0 && num(s.mirror_fold) === 1) out += chip('mirror', null, 'info');
+    if (c.indexOf('occupant') >= 0 && num(s.occupant) === 1) out += chip('occupant', null, 'on');
+    // ★632 12V 저전압(power:POWER_LOW_VOLTAGE, 0=정상/1=경고 — SnifferService 확정). 백스톱 폴 없이 이벤트로만 갱신.
+    if (c.indexOf('lowbatt') >= 0 && num(raw('power:POWER_LOW_VOLTAGE')) === 1) out += chip('lowbatt', null, 'alert');
+    el('chips').innerHTML = out;
+  }
+  setInterval(function(){ if (!editMode) refreshValues(); }, 1000);
+
+  var feed = 'sse';   // sse | poll — 어느 경로로 값이 들어오는지(표시용)
+  function conn(ok){
+    el('dot').className = ok ? '' : 'bad';
+    el('connTxt').textContent = ok ? (DEMO ? '데모' : (feed === 'poll' ? '폴링' : '실시간')) : (lastOk ? Math.round((Date.now() - lastOk) / 1000) + '초 전' : '연결 끊김');
+  }
+
+  function merge(d){ for (var k in d){ if (k === 'raw' && d.raw && typeof d.raw === 'object'){ for (var rk in d.raw) S.raw[rk] = d.raw[rk]; } else S[k] = d[k]; } }
+  function connect(){
+    if (es) { try { es.close(); } catch(e){} }
+    es = new EventSource('/cluster/events?nocam=1');   // ★716 클러스터는 카메라를 안 띄운다 — 이 접속으론 릴레이가 카메라를 예열하지 않는다(보조 카메라는 폰 링크락이 따로 붙음)
+    es.addEventListener('state', function(ev){ try { merge(JSON.parse(ev.data)); } catch(e){ return; } feed = 'sse'; lastOk = Date.now(); conn(true); render(); });
+    es.addEventListener('ping', function(){ feed = 'sse'; lastOk = Date.now(); conn(true); });
+    es.onopen = function(){ lastOk = Date.now(); conn(true); };
+    es.onerror = function(){ conn(false); try { es.close(); } catch(e){} es = null; setTimeout(connect, 3000); };
+  }
+  setInterval(function(){ if (!DEMO && Date.now() - lastOk > 25000) conn(false); }, 1000);
+
+  // ★551 폴링 폴백 — SSE(text/event-stream)가 통하지 않는 환경에서도 계기판이 멈추지 않게 한다.
+  //   09-21 실측: 접속 직후 본문 0바이트로 끊겨 값이 한 번도 안 들어왔다. 6초간 수신이 없으면 스냅샷을 1.5초마다 직접 읽고,
+  //   SSE가 되살아나면(state/ping 수신) 아래 조건에서 자동으로 빠져 스스로 조용해진다 — 별도 전환 스위치 없음.
+  setInterval(function(){
+    if (DEMO || Date.now() - lastOk < 6000) return;
+    fetch('/cluster/state', { cache: 'no-store' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ if (!d) return; feed = 'poll'; merge(d); lastOk = Date.now(); conn(true); render(); })
+      .catch(function(){});
+  }, 1500);
+
+  function demo(){
+    el('demoTag').hidden = false;
+    S = { speed:0, gear:2, trip_soc:63, trip_odo:6310, trip_eff:128, trip_inst:95, out_temp:29, turnflash:1, power_level:2, bsd_state:1, ac_power:1, ac_wind:3, drive_mode_get:3, regen:2, steer_mode:1, brake_mode:2, trip_speed:38, cool_min:12,
+          // ★632 신규 위젯 미리보기 값
+          trip_avg_spd:42, trip_jkm:345, trip_jtime:38, ac_start_st:1, ac_work_mode:2, ac_temp_raw:44,
+          door_driver:0, door_rf:0, door_lr:0, door_rr:0, door_trunk:0, lock:1,
+          side_light:1, rear_fog:0, brake_pedal:0, accel_pct:30,   // ★821 블랙박스 항목 미리보기
+          raw:{ 'setting:SET_ELECTRIC_RANGE':404, 'bodywork:BODYWORK_BATTERY_POWER':0, 'instrument:I_2IN1_LF_TYRE_PRESSURE':391,'instrument:I_2IN1_LF_TYRE_TEMPERATURE':31,'instrument:I_2IN1_RF_TYRE_PRESSURE':394,'instrument:I_2IN1_RF_TYRE_TEMPERATURE':31,
+                'instrument:I_2IN1_RB_TYRE_PRESSURE':391,'instrument:I_2IN1_RB_TYRE_TEMPERATURE':30,'instrument:I_2IN1_LB_TYRE_PRESSURE':390,'instrument:I_2IN1_LB_TYRE_TEMPERATURE':30,
+                'charging:CHARGING_CHARGE_BATTERY_VOLT':414,'charging:CHARGING_CHARGE_CURRENT':0,'charging:CHARGING_GUN_CONNECT_STATE':0,'light:LIGHT_LOW_BEAM_LIGHT':1,'power:POWER_LOW_VOLTAGE':0 } };
+    var t = 0;
+    setInterval(function(){
+      t += 0.2;
+      S.speed = Math.max(0, 58 + 26 * Math.sin(t / 3.1) + 9 * Math.sin(t / 0.9));
+      S.raw['bodywork:BODYWORK_BATTERY_POWER'] = Math.round(Math.cos(t / 3.1) * 30 + 8);
+      var ph = t % 18; S.turnflash = ph > 6 && ph < 9 ? 2 : (ph > 13 && ph < 16 ? 4 : 1);
+      S.drive_mode_get = [3, 1, 2][Math.floor(t / 12) % 3];
+      var dv = 26 * Math.cos(t / 3.1) / 3.1; S.accel_pct = Math.max(0, Math.min(100, Math.round(20 + dv * 6))); S.brake_pedal = dv < -5 ? 1 : 0;
+      S.raw['setting:SET_ELECTRIC_RANGE'] = 404 - Math.floor(t / 20);
+      lastOk = Date.now(); conn(true); render();
+    }, 200);
+    render();
+  }
+
+  // ── 설정 시트 ──
+  function buildSheet(){
+    el('looks').innerHTML = LOOKS.map(function(l){
+      return '<button type="button" class="look' + (l.id === CFG.look ? ' on' : '') + '" data-look="' + l.id + '">' +
+             '<div class="sw" style="background:' + l.sw[0] + '"><i style="background:' + l.sw[1] + '"></i><i style="background:' + l.sw[2] + '"></i><i style="background:#2a3441"></i></div><span>' + l.name + '</span></button>';
+    }).join('');
+    el('chipSel').innerHTML = Object.keys(CHIPS).map(function(k){
+      var on = CFG.chips.indexOf(k) >= 0;
+      return '<button type="button" class="pick" data-chip="' + k + '" style="border-color:' + (on ? 'var(--accent)' : 'var(--line)') + '">' +
+             '<span class="pv" style="color:' + (on ? 'var(--accent)' : 'var(--muted)') + '">' + svg(CHIP_ICONS[k]) + CHIPS[k] + '</span></button>';
+    }).join('');
+    var segs = el('maxSeg').children; for (var j = 0; j < segs.length; j++) segs[j].classList.toggle('on', Number(segs[j].getAttribute('data-max')) === CFG.max);
+    var gsg = el('gaugeSeg').children; for (var q = 0; q < gsg.length; q++) gsg[q].classList.toggle('on', gsg[q].getAttribute('data-gauge') === CFG.gauge);
+    var esg = el('effSeg').children; for (var e2 = 0; e2 < esg.length; e2++) esg[e2].classList.toggle('on', esg[e2].getAttribute('data-eff') === EFFUNIT);
+    // ★619 씨라7 미지원 — 카메라 섹션 숨김
+    if (el('camSec')) el('camSec').hidden = !!S.dilink5;
+    if (el('camSecDiv')) el('camSecDiv').hidden = !!S.dilink5;
+  }
+  function openSheet(){ buildSheet(); el('sheet').hidden = false; el('scrim').hidden = false; }
+  function closeSheet(){ el('sheet').hidden = true; el('scrim').hidden = true; }
+  el('cfgBtn').addEventListener('click', openSheet);
+  el('cfgClose').addEventListener('click', closeSheet);
+  el('scrim').addEventListener('click', closeSheet);
+  el('sheet').addEventListener('click', function(e){
+    var t = e.target.closest('[data-look],[data-chip],[data-max],[data-gauge],[data-eff]'); if (!t) return;
+    // ★632 전비 단위는 CFG/릴레이와 무관한 로컬 취향 — save()(릴레이 전송) 없이 즉시 반영만
+    if (t.dataset.eff){ setEffUnit(t.dataset.eff); buildSheet(); refreshValues(); return; }
+    if (t.dataset.look){
+      CFG.look = t.dataset.look;
+      // 테마에 속한 shape 자동 적용
+      var lookObj = LOOKS.find(function(l){ return l.id === CFG.look; });
+      if (lookObj && lookObj.shape) CFG.shape = lookObj.shape;
+    }
+    else if (t.dataset.chip){ var i = CFG.chips.indexOf(t.dataset.chip); if (i >= 0) CFG.chips.splice(i, 1); else CFG.chips.push(t.dataset.chip); }
+    else if (t.dataset.max){ CFG.max = Number(t.dataset.max); ticks(); }
+    else if (t.dataset.gauge){ CFG.gauge = t.dataset.gauge; }
+    save(); buildSheet(); render();
+  });
+
+  // ── 위젯 편집(직접 조작, 2026-09-28) ──
+  function enterEdit(){
+    if (editMode) return;
+    dbg('EDIT START: entering edit mode');
+    editMode = true;
+    selSide = null; selIdx = -1;
+    closeSheet();
+    el('doneBtn').hidden = false;
+    el('doneBtn').classList.add('pri');
+    el('sideL').classList.add('editing');
+    el('sideC').classList.add('editing');
+    el('sideR').classList.add('editing');
+    renderSides();
+  }
+  function exitEdit(){
+    if (!editMode) return;
+    dbg('EDIT END: exiting edit mode');
+    editMode = false;
+    selSide = null; selIdx = -1;
+    el('doneBtn').hidden = true;
+    el('doneBtn').classList.remove('pri');
+    el('sideL').classList.remove('editing');
+    el('sideC').classList.remove('editing');
+    el('sideR').classList.remove('editing');
+    save();
+    renderSides();
+    refreshValues();
+  }
+  // ★665 설정 시트 탭 — h3 제목 기준으로 그룹을 나눠 한 번에 한 묶음만 보여준다(긴 스크롤 제거)
+  (function(){
+    var body = el('shBody'), tabOf = { '테마':0, '속도계':1, '전비 단위':1, '하단 상태 아이콘':1, '위젯':2 }, cur = 0, n = 0;
+    Array.prototype.forEach.call(body.children, function(ch){
+      if (ch.tagName === 'H3'){ var t = (ch.childNodes[0] ? ch.childNodes[0].textContent : '').trim(); if (tabOf[t] !== undefined) cur = tabOf[t]; }
+      ch.setAttribute('data-tab', cur); n++;
+    });
+    function show(i){
+      Array.prototype.forEach.call(body.children, function(ch){ ch.style.display = (+ch.getAttribute('data-tab') === i) ? '' : 'none'; });
+      el('shTabs').querySelectorAll('button').forEach(function(b){ b.classList.toggle('on', +b.dataset.tab === i); });
+      body.scrollTop = 0;
+    }
+    el('shTabs').addEventListener('click', function(e){ var b = e.target.closest('[data-tab]'); if (b) show(+b.dataset.tab); });
+    show(0);
+  })();
+  el('editBtn').addEventListener('click', enterEdit);
+  el('doneBtn').addEventListener('click', exitEdit);
+
+  // ★632 포인터 이벤트 하나로 통일 — 예전엔 click+touchend+pointerup을 한 요소에 다 걸어 두 번 토글되는 버그가 있었다.
+  //   길게 누르면(600ms) 편집모드 진입, 편집 중엔 탭=선택(핸들 표시)·몸통 드래그=이동·모서리 핸들 드래그=크기.
+  var mainEl = document.querySelector('.main');
+  var pressTimer = null, pressStart = null;
+  var PT = null;   // 진행 중인 선택/이동/크기조절 제스처
+  function cancelPress(){ clearTimeout(pressTimer); pressTimer = null; pressStart = null; }
+  function cellSize(sid){
+    var host = el(sid), r = host.getBoundingClientRect(), rows = rowsNeeded(arrFor(sid));
+    return { w: r.width / COLS, h: r.height / Math.max(1, rows) };
+  }
+  function resizeFromCorner(orig, corner, dxCell, dyCell){
+    var clamp2 = function(v){ return Math.max(1, Math.min(2, Math.round(v))); };
+    var w = orig.w, h = orig.h, x = orig.x, y = orig.y;
+    if (corner === 'se'){ w = clamp2(orig.w + dxCell); h = clamp2(orig.h + dyCell); }
+    else if (corner === 'ne'){ w = clamp2(orig.w + dxCell); h = clamp2(orig.h - dyCell); y = orig.y + orig.h - h; }
+    else if (corner === 'sw'){ w = clamp2(orig.w - dxCell); x = orig.x + orig.w - w; h = clamp2(orig.h + dyCell); }
+    else if (corner === 'nw'){ w = clamp2(orig.w - dxCell); x = orig.x + orig.w - w; h = clamp2(orig.h - dyCell); y = orig.y + orig.h - h; }
+    x = Math.max(0, Math.min(x, COLS - w));
+    y = Math.max(0, y);
+    return { x:x, y:y, w:w, h:h };
+  }
+  function doAdd(sid){
+    var arr = arrFor(sid), p = firstFit(arr, 1, 1);
+    arr.push({ m:'temp', x:p.x, y:p.y, w:1, h:1 });
+    save(); renderSides();
+    selectW(sid, arr.length - 1);
+    openWact(sid, arr.length - 1);
+  }
+  function onDown(e){
+    if (!editMode){
+      pressStart = { x:e.clientX, y:e.clientY };
+      clearTimeout(pressTimer);
+      pressTimer = setTimeout(function(){ pressTimer = null; enterEdit(); }, 600);
+      return;
+    }
+    var handle = e.target.closest('.rh');
+    var badge = e.target.closest('.edit-badge');
+    var addEl = e.target.closest('[data-add]');
+    var wEl = e.target.closest('.w:not(.add)');
+    if (addEl){ e.preventDefault(); doAdd(addEl.getAttribute('data-add')); return; }
+    if (!wEl){ deselectW(); return; }
+    var sid = wEl.getAttribute('data-side'), idx = +wEl.getAttribute('data-idx');
+    var arr = arrFor(sid), w = arr[idx]; if (!w) return;
+    if (w.m === 'spd' && (badge || handle)){ e.preventDefault(); toast('속도계는 끌어서 위·아래로만 옮길 수 있습니다'); return; }
+    if (badge){ e.preventDefault(); selectW(sid, idx); openWact(sid, idx); return; }
+    if (handle){
+      e.preventDefault();
+      var cell = cellSize(sid);
+      PT = { mode:'resize', side:sid, idx:idx, corner:handle.getAttribute('data-corner'),
+             startX:e.clientX, startY:e.clientY, cellW:cell.w, cellH:cell.h, orig:{x:w.x,y:w.y,w:w.w,h:w.h} };
+      if (e.pointerId != null && handle.setPointerCapture) { try { handle.setPointerCapture(e.pointerId); } catch(_){} }
+      return;
+    }
+    // 몸통 — 선택하고 드래그 준비(임계값 넘으면 이동으로 전환)
+    var wasSel = (selSide === sid && selIdx === idx);
+    selectW(sid, idx);
+    var cell2 = cellSize(sid);
+    PT = { mode:'pending', side:sid, idx:idx, startX:e.clientX, startY:e.clientY,
+           cellW:cell2.w, cellH:cell2.h, orig:{x:w.x,y:w.y,w:w.w,h:w.h}, wasSel:wasSel };
+    if (e.pointerId != null && wEl.setPointerCapture) { try { wEl.setPointerCapture(e.pointerId); } catch(_){} }
+    e.preventDefault();
+  }
+  function onMove(e){
+    if (pressTimer && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 8) cancelPress();
+    if (!PT) return;
+    var dx = e.clientX - PT.startX, dy = e.clientY - PT.startY;
+    if (PT.mode === 'pending'){
+      if (Math.hypot(dx, dy) < 6) return;
+      PT.mode = 'move';
+    }
+    var host = el(PT.side), wEl = host && host.querySelector('.w[data-idx="' + PT.idx + '"]');
+    if (!wEl) return;
+    var dxCell = dx / PT.cellW, dyCell = dy / PT.cellH;
+    if (PT.mode === 'move'){
+      var nx = Math.max(0, Math.min(COLS - PT.orig.w, Math.round(PT.orig.x + dxCell)));
+      var ny = Math.max(0, Math.round(PT.orig.y + dyCell));
+      PT.cur = { x:nx, y:ny, w:PT.orig.w, h:PT.orig.h };
+      wEl.style.gridColumn = (nx + 1) + '/span ' + PT.orig.w;
+      wEl.style.gridRow = (ny + 1) + '/span ' + PT.orig.h;
+    } else if (PT.mode === 'resize'){
+      var r = resizeFromCorner(PT.orig, PT.corner, dxCell, dyCell);
+      PT.cur = r;
+      wEl.style.gridColumn = (r.x + 1) + '/span ' + r.w;
+      wEl.style.gridRow = (r.y + 1) + '/span ' + r.h;
+      wEl.classList.toggle('w2', r.w === 2);
+      wEl.classList.toggle('h2', r.h === 2);
+    }
+  }
+  function onUp(e){
+    cancelPress();
+    if (!PT) return;
+    var mode = PT.mode, sid = PT.side, idx = PT.idx, arr = arrFor(sid), w = arr[idx];
+    if (mode === 'pending'){
+      // ★선택된 위젯을 한 번 더 탭 → 바꾸기·삭제 시트(운영자 09-28). 속도계는 바꾸기·삭제 불가라 안내만.
+      if (PT.wasSel){ if (w && w.m === 'spd') toast('속도계는 끌어서 위·아래로만 옮길 수 있습니다'); else openWact(sid, idx); }
+      PT = null;
+      return;
+    }
+    if (w && PT.cur && w.m === 'spd'){
+      // ★속도계 이동 — 가로는 고정, 세로만. 겹친 위젯은 빈칸으로 비켜 준다(겹침 원위치 규칙 예외: 속도계는 막히면 옮길 수가 없음).
+      w.x = 0; w.y = PT.cur.y;
+      var kept = [w], moved = [];
+      arr.forEach(function(o, i){ if (i === idx) return; (occupied([w], o.x, o.y, o.w, o.h) ? moved : kept).push(o); });
+      moved.forEach(function(o){ var q = firstFit(kept, o.w, o.h); o.x = q.x; o.y = q.y; kept.push(o); });
+      save();
+    } else if (w && PT.cur){
+      var others = arr.filter(function(_, i){ return i !== idx; });
+      var inBounds = PT.cur.x >= 0 && PT.cur.y >= 0 && PT.cur.x + PT.cur.w <= COLS;
+      // ★겹침 방지 — 겹치면 원위치 복귀(값 미변경). 안 겹치면 커밋.
+      if (inBounds && !occupied(others, PT.cur.x, PT.cur.y, PT.cur.w, PT.cur.h)){
+        w.x = PT.cur.x; w.y = PT.cur.y; w.w = PT.cur.w; w.h = PT.cur.h;
+      }
+      save();
+    }
+    PT = null;
+    renderSides();
+  }
+  mainEl.addEventListener('pointerdown', onDown);
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
+  document.addEventListener('pointercancel', onUp);
+  mainEl.addEventListener('contextmenu', function(e){ if (pressStart || editMode) e.preventDefault(); });
+
+  // 위젯 종류 변경·삭제 시트(크기·위치는 위 드래그/핸들로 처리 — 이 시트엔 남기지 않음)
+  var wSide = null, wIdx = -1;
+  function curArr(){ return arrFor(wSide); }
+  function openWact(sid, idx){
+    dbg('WACT OPEN: side=' + sid + ' idx=' + idx);
+    wSide = sid; wIdx = idx;
+    var arr = curArr();
+    if (!arr || !arr[idx]){
+      dbg('WACT OPEN: ERROR - array[' + idx + '] undefined! arr.length=' + (arr ? arr.length : 'null'));
+      return;
+    }
+    var w = arr[idx];
+    el('wactTitle').innerHTML = svg(iconFor(w.m)) + ' ' + esc(metricLabel(w.m));
+    renderPickGrid(w.m);
+    renderWOpts();
+    el('wact').hidden = false;
+  }
+  // ★665 표시 형식(숫자/다이얼)·크기 — 속도계는 형식·크기 고정, 다이얼 범위가 없는 항목은 '다이얼' 비활성
+  function renderWOpts(){
+    var arr = curArr(), w = arr && arr[wIdx]; if (!w) return;
+    var isSpd = w.m === 'spd', mm = METRICS[w.m] || {};
+    var canDial = !isSpd && !!mm.dial;
+    el('wFmt').querySelectorAll('button').forEach(function(b){
+      b.disabled = b.dataset.fmt === 'dial' ? !canDial : isSpd;
+      b.classList.toggle('on', b.dataset.fmt === 'dial' ? (w.s === 'dial' && canDial) : !(w.s === 'dial' && canDial));
+    });
+    var cur = w.w + 'x' + w.h;
+    el('wSize').querySelectorAll('button').forEach(function(b){ b.disabled = isSpd; b.classList.toggle('on', b.dataset.sz === cur); });
+  }
+  function applySize(wd, ht){
+    var arr = curArr(), w = arr && arr[wIdx]; if (!w || w.m === 'spd') return;
+    var others = arr.filter(function(o, i){ return i !== wIdx; });
+    var x = Math.max(0, Math.min(w.x, COLS - wd)), y = Math.max(0, w.y);
+    if (occupied(others, x, y, wd, ht)){ var p = firstFit(others, wd, ht); x = p.x; y = p.y; }
+    w.w = wd; w.h = ht; w.x = x; w.y = y;
+    save(); renderSides(); renderWOpts();
+  }
+  el('wFmt').addEventListener('click', function(e){
+    var b = e.target.closest('[data-fmt]'); if (!b || b.disabled) return;
+    var arr = curArr(), w = arr && arr[wIdx]; if (!w) return;
+    w.s = b.dataset.fmt === 'dial' ? 'dial' : undefined;
+    save(); renderSides(); renderWOpts();
+  });
+  el('wSize').addEventListener('click', function(e){
+    var b = e.target.closest('[data-sz]'); if (!b || b.disabled) return;
+    var parts = b.dataset.sz.split('x'); applySize(+parts[0], +parts[1]);
+  });
+  // ★항목 그리드 — 아이콘·라벨과 함께 **지금 그 값이 얼마인지** 보여준다. 값이 없으면 '–'.
+  //   종전 피커는 이름만 나열해서 무엇을 고를지 판단이 안 됐고, 별도 레이어로 떠서 상위 시트와 겹쳤다.
+  function renderPickGrid(cur){
+    var html = PICK_GROUPS.map(function(g){
+      return '<div class="wsec" style="grid-column:1/-1">' + esc(g[0]) + '</div>' + g[1].map(function(k){
+        var vTxt = '–';
+        try { var t = widgetInner(k); if (t && t.v != null) vTxt = String(t.v); } catch (e) {}
+        vTxt = vTxt.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();   // 위젯 HTML → 값 텍스트만
+        if (vTxt.length > 14) vTxt = vTxt.slice(0, 14);
+        return '<button type="button" class="wcard' + (k === cur ? ' on' : '') + '" data-opt="' + k + '">'
+             + '<span class="wl">' + svg(iconFor(k)) + esc(metricLabel(k)) + '</span>'
+             + '<span class="wv">' + esc(vTxt || '–') + '</span></button>';
+      }).join('');
+    }).join('');
+    el('wPick').innerHTML = html;
+  }
+  function closeWact(){
+    dbg('WACT CLOSE');
+    el('wact').hidden = true;
+    wSide = null;
+    wIdx = -1;
+  }
+  el('wact').addEventListener('click', function(e){
+    if (e.target === el('wact')) { closeWact(); return; }
+    // ★항목 카드 탭 = 즉시 반영(시트를 닫지 않아 바로 결과를 보고 다른 항목을 이어서 고를 수 있다)
+    var opt = e.target.closest('[data-opt]');
+    if (opt){
+      var arr0 = curArr(); if (wIdx < 0 || !arr0[wIdx]) return;
+      arr0[wIdx].m = opt.dataset.opt;
+      save(); renderSides();
+      el('wactTitle').innerHTML = svg(iconFor(arr0[wIdx].m)) + ' ' + esc(metricLabel(arr0[wIdx].m));
+      renderPickGrid(arr0[wIdx].m);
+      renderWOpts();
+      dbg('PICK(통합): ' + opt.dataset.opt);
+      return;
+    }
+  });
+  el('wDel').addEventListener('click', function(){
+    dbg('WACT DELETE: idx=' + wIdx);
+    var arr = curArr();
+    if (wIdx < 0 || !arr[wIdx]) return;
+    if (arr[wIdx].m === 'spd') { toast('속도계는 삭제할 수 없습니다'); return; }
+    arr.splice(wIdx, 1);
+    deselectW();
+    save();
+    closeWact();
+    renderSides();
+  });
+  el('wClose').addEventListener('click', closeWact);
+
+  // 항목 피커
+  function openPicker(){
+    dbg('PICK OPEN: wIdx=' + wIdx + ' wSide=' + wSide);
+    var arr = curArr();
+    if (!arr || !arr[wIdx]){
+      dbg('PICK OPEN: ERROR - array[' + wIdx + '] undefined!');
+      return;
+    }
+    var w = arr[wIdx];
+    dbg('PICK OPEN: current metric=' + w.m);
+    var html = PICK_GROUPS.map(function(g){
+      return '<div class="pgrp">' + g[0] + '</div>' + g[1].map(function(k){
+        return '<button type="button" class="prow' + (w.m === k ? ' on' : '') + '" data-opt="' + k + '">' + svg(iconFor(k)) + '<span>' + esc(metricLabel(k)) + '</span></button>';
+      }).join('');
+    }).join('');
+    el('pickList').innerHTML = html;
+    el('pickTitle').textContent = '항목 선택';
+    el('pickOv').hidden = false;
+    var on = el('pickList').querySelector('.prow.on');
+    if (on) on.scrollIntoView({ block: 'center' });
+    dbg('PICK OPEN: dialog shown, ' + (on ? 'current selected' : 'no selection found'));
+  }
+  el('pickOv').addEventListener('click', function(e){
+    if (e.target === el('pickOv') || e.target.id === 'pickClose') {
+      dbg('PICK CLOSE');
+      el('pickOv').hidden = true;
+      return;
+    }
+    var t = e.target.closest('[data-opt]');
+    if (!t){
+      dbg('PICK CLICK: no data-opt found');
+      return;
+    }
+    if (wIdx < 0){
+      dbg('PICK CLICK: ERROR - wIdx=' + wIdx);
+      return;
+    }
+    var opt = t.dataset.opt;
+    dbg('PICK SELECT: ' + opt);
+    curArr()[wIdx].m = opt;
+    save();
+    el('pickOv').hidden = true;
+    renderSides();
+    openWact(wSide, wIdx, false);
+  });
+
+  // ★632 원격 편집 레이아웃 저장 결과 — 실패했을 때만 알림(성공은 기존처럼 조용히). ★716 카메라 조정은 실시간 카메라 조정 화면으로 옮겨 여기서 뺐다.
+  window.LK_result = function(type, ok, msg){
+    if (type === 'layout'){
+      if (ok) dbg('LAYOUT SAVE RESULT: ok');
+      else { toast('레이아웃 저장 실패: ' + (msg || 'unknown error')); dbg('LAYOUT SAVE RESULT: error ' + msg); }
+    }
+  };
+
+  // 전체화면
+  el('fsBtn').addEventListener('click', function(){
+    var d = document.documentElement, f = d.requestFullscreen || d.webkitRequestFullscreen;
+    if (f) { try { var p = f.call(d); if (p && p.catch) p.catch(function(){}); } catch(e){} return; }
+    toast('아이폰은 공유 ▸ "홈 화면에 추가" 후 그 아이콘으로 열면 전체화면으로 표시됩니다');
+  });
+  // HUD 좌우반전(윈드실드 반사용) — body 통째 scaleX(-1), localStorage로 유지
+  el('hudBtn').addEventListener('click', function(){
+    var on = !document.body.classList.contains('hud');
+    document.body.classList.toggle('hud', on);
+    el('hudBtn').classList.toggle('pri', on);
+    try { localStorage.setItem('cluster_hud', on ? '1' : '0'); } catch(e){}
+  });
+  try { if (localStorage.getItem('cluster_hud') === '1'){ document.body.classList.add('hud'); el('hudBtn').classList.add('pri'); } } catch(e){}
+  function toast(msg){ var t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; document.body.appendChild(t); setTimeout(function(){ t.remove(); }, 4500); }
+
+  el('socIc').innerHTML = svg(ICONS.soc);
+  el('rangeIc').innerHTML = svg(ICONS.range);
+
+  // URL 쿼리로 테마/shape override (테스트용)
+  var qLook = new URL(location.href).searchParams.get('look');
+  if (qLook && LOOKS.find(function(l){ return l.id === qLook; })) CFG.look = qLook;
+
+  // ★619 WebKit 브릿지 함수 정의 (REMOTE 모드 조건은 앱에서 체크, 여기선 항상 정의)
+  window.lkPost = function(o){ try{ if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.lk){ window.webkit.messageHandlers.lk.postMessage(o); return true; } if(window.LKAndroid&&window.LKAndroid.post){ window.LKAndroid.post(JSON.stringify(o)); return true; } }catch(e){} return false; };
+
+  // ★619 원격 배너 표시(REMOTE 모드)
+  if (REMOTE) { el('remoteBanner').hidden = false; setTimeout(function(){ el('remoteBanner').hidden = true; }, 6000); }   // ★09-30 안내는 6초만(설정 버튼을 가리던 배너)
+
+  // ★619 릴레이 레이아웃 로드 (LAN 모드) — 페이지 초기화 시점에 실행
+  if (!REMOTE && !DEMO){
+    fetch('/cluster/cfg', { cache: 'no-store' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if (!j) return;
+        if (j.layout){
+          CFG = fromLayout(j.layout);
+          dbg('RELAY CONFIG LOADED: layout from relay');
+        } else if (j.layout === null && hadLocal){
+          // 릴레이에 레이아웃이 없으면 로컬 저장 config를 릴레이로 마이그레이션
+          relayCmd('CLUSTERCFG', {layout:CFG}).catch(function(){});
+          dbg('RELAY CONFIG MIGRATE: sending local to relay');
+        }
+        applyLook(); ticks(); renderSides();
+        dbg('RELAY CONFIG APPLIED');
+      })
+      .catch(function(){ applyLook(); ticks(); renderSides(); });
+  } else {
+    applyLook(); ticks(); renderSides();
+  }
+
+  // ★619 LK_init — REMOTE 모드에서 앱이 onPageFinished 시점에 호출
+  // 페이지가 이미 기본 렌더링되었을 수 있으니, 여기서 CFG를 다시 적용하고 전체 렌더링
+  window.LK_init = function(o){
+    dbg('LK_INIT: layout=' + (o.layout?'yes':'no'));
+    if (o.layout){
+      CFG = fromLayout(o.layout);
+    }
+    applyLook(); ticks(); renderSides(); render();
+  };
+
+  if (DEMO) demo(); else if (!REMOTE) connect();
+
+  // 자동 편집모드 진입 (디버깅용) — ★632 enterEdit()로 통합(예전엔 sideC editing 클래스가 빠져 있었다)
+  if (AUTO_EDIT){
+    dbg('AUTO_EDIT: entering edit mode');
+    setTimeout(function(){ enterEdit(); dbg('AUTO_EDIT: edit mode ready'); }, 300);
+  }
+
+  if ('wakeLock' in navigator){
+    var req = function(){ navigator.wakeLock.request('screen').catch(function(){}); };
+    req(); document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible') req(); });
+  }
+})();
+</script>
+
+</body></html>

@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="com.byd.car.server.PROVIDER" />   <!-- ★832 차 속성 서비스(좌석·벨트 값) — normal 권한 -->
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- ★713/708 차 전체 데이터 사용량(NetworkStatsManager) — 앱 옵스는 폰이 요청할 때 릴레이가 ADB로 허용 -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- ★678 오버드라이브 51.6이 선언하는 BYDAUTO_* 권한 중 우리에게 없던 것 전부(운영자 10-01 "오드는 되는데 우리는 null?"). 씨라7 전부에서 BYDAutoSpecialDevice(D5 sentry wake) 장치가
+         null이었는데, 오드 매니페스트엔 BYDAUTO_SPECIAL_GET/SET·POWER_SET 등이 있고 우리는 없었다(v101 DOOR_LOCK_SET 누락과 같은 유형 의심). 선언만 추가 — 미부여 권한은 무해. -->
+    <uses-permission android:name="android.permission.BYDAUTO_AUDIO_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_AUDIO_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_AUDIO_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_AUX_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_AUX_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_BIGDATA_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_BLUETOOTH_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_BLUETOOTH_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_BMS_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_BMS_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_COLLISION_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_COLLISION_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_CPUTEMPRATURE_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_DTC_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_DTC_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_ENERGY_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_ENERGY_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_ENERGY_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_ENGINE_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_FUNCNOTICE_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_FUNCNOTICE_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_GB_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_LOCATION_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_LOCATION_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_MOTOR_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_MOTOR_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_MOTOR_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_MQTT_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_MQTT_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_MULTIMEDIA_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_MULTIMEDIA_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_MULTIMEDIA_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_OTA_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_PANORAMA_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_PANORAMA_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_PANORAMA_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_PHONE_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_PHONE_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_PM" />
+    <uses-permission android:name="android.permission.BYDAUTO_POWER_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_QCFS_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_QCFS_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_RADAR_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_RADIO_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_RADIO_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_REAR_VIEW_MIRROR_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_REMINDER_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_REMINDER_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_RESCUE_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_RESCUE_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_RSE_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_RSE_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SAFETY_BELT_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SECURITY_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SENSOR_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_SENSOR_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SENSOR_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SIGNAL_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SPECIAL_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SPECIAL_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SPEED_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_SPEED_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SPEED_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SRS_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_SRS_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SRS_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_STATISTIC_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_TEST_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_TEST_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_TIME_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_TIME_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_TIME_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_TYRE_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_VEHICLEHEALTH_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_VEHICLEHEALTH_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_VEHICLE_DATA_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_VEHICLE_DATA_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_VERSION_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_VERSION_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_VIDEO_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_VIDEO_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_YUN_GET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 일렉트로 동일 선언 — DiLink ROM이 자동 부여하는지 부팅 로그로 확인(순정 안드로이드는 adb pm grant 필요) -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <!-- ★센트리 녹화 저장(외장 USB·SD 볼륨 쓰기) — adb pm grant로 부여, 실패하면 내부 저장소로 폴백 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- ★v176 오토스타트금지 직접해제(bg_datacache.setAppOpsData)용 BYD 커스텀 권한 — ROM 자동부여 여부 APPOPSPROBE로 확인 -->
+    <uses-permission android:name="android.permission.ACCESS_APPOPSDATA" />
+    <!-- ★v94 헤드유닛 iBeacon advertise(ESP32 대체) — SDK29라 레거시 BLUETOOTH/ADMIN으로 충분(ADVERTISE는 API31+) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+
+    <!-- BYD HAL Permissions -->
+    <uses-permission android:name="android.permission.BYDACQUISITION_SEND_BUFFER" />
+    <uses-permission android:name="android.permission.BYDACQUISITION_SEND_FILE" />
+    <uses-permission android:name="com.byd.ditrainer.permission.CORE" />
+
+    <!-- Radar -->
+    <uses-permission android:name="android.permission.BYDAUTO_RADAR_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_RADAR_GET" />
+    <!-- Bodywork -->
+    <uses-permission android:name="android.permission.BYDAUTO_BODYWORK_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_BODYWORK_GET" />
+    <!-- Power -->
+    <uses-permission android:name="android.permission.BYDAUTO_POWER_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_POWER_GET" />
+    <!-- Door Lock — ★v101 실제 권한명은 DOOR_LOCK(언더스코어). 기존 DOORLOCK(붙임)은 존재하지 않는 권한이라 무효였음.
+         특히 _SET(쓰기)이 통째로 빠져 잠금/해제가 "가짜 OK"였던 근본 원인(2026-08-02 pm list permissions로 확인). -->
+    <uses-permission android:name="android.permission.BYDAUTO_DOOR_LOCK_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_DOOR_LOCK_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_DOOR_LOCK_SET" />
+    <!-- Engine -->
+    <uses-permission android:name="android.permission.BYDAUTO_ENGINE_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_ENGINE_GET" />
+    <!-- Gearbox -->
+    <uses-permission android:name="android.permission.BYDAUTO_GEARBOX_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_GEARBOX_GET" />
+    <!-- Instrument -->
+    <uses-permission android:name="android.permission.BYDAUTO_INSTRUMENT_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_INSTRUMENT_GET" />
+    <!-- Charging -->
+    <uses-permission android:name="android.permission.BYDAUTO_CHARGING_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_CHARGING_GET" />
+    <!-- Statistic -->
+    <uses-permission android:name="android.permission.BYDAUTO_STATISTIC_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_STATISTIC_GET" />
+    <!-- Tyre -->
+    <uses-permission android:name="android.permission.BYDAUTO_TYRE_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_TYRE_GET" />
+    <!-- Safety Belt — ★2026-09-19 D5 이벤트: safetybelt만 SecurityException(BYDAUTO_SAFETY_BELT_COMMON 미선언)이라 실구현(SafetyBeltManagerImpl) 도달 후 권한벽. 선언으로 해결(AC_COMMON 패턴). -->
+    <uses-permission android:name="android.permission.BYDAUTO_SAFETY_BELT_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_SAFETY_BELT_GET" />
+    <!-- Safety Belt -->
+    <uses-permission android:name="android.permission.BYDAUTO_SAFETYBELT_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_SAFETYBELT_GET" />
+    <!-- OTA -->
+    <uses-permission android:name="android.permission.BYDAUTO_OTA_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_OTA_GET" />
+    <!-- ★v178 setProperty(차량설정 쓰기) 권한 — grantable 여부 CARSET로 확인(문잠금 SET처럼 signature면 거부) -->
+    <uses-permission android:name="android.permission.BYDAUTO_SETTING_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_SETTING_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SETTING_SET" />
+    <!-- ★v180 Overdrive 방식 — 도메인별 _SET 권한(라이트·미러·ADAS·와이퍼·바디·시트·계기판). self pm grant로 grantable 여부 GRANTPERMS로 확인. -->
+    <uses-permission android:name="android.permission.BYDAUTO_LIGHT_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_LIGHT_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_LIGHT_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_REAR_VIEW_MIRROR_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_REAR_VIEW_MIRROR_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_ADAS_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_ADAS_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_ADAS_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_WIPER_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_WIPER_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_BODYWORK_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SEAT_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_SEAT_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_SEAT_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_INSTRUMENT_SET" />
+    <uses-permission android:name="android.permission.BYDAUTO_AC_SET" />
+    <!-- ★씨라이언7(DiLink5) 공조 제어 = AC_COMMON 필수(2026-09-11 실차: getInstance SecurityException requires BYDAUTO_AC_COMMON). 미선언이면 pm grant도 실패 → AC 장치 영영 null. bydcontroller가 AC_COMMON/GET/SET 다 선언하는 것 참조. -->
+    <uses-permission android:name="android.permission.BYDAUTO_AC_COMMON" />
+    <uses-permission android:name="android.permission.BYDAUTO_AC_GET" />
+    <uses-permission android:name="android.permission.BYDAUTO_CHARGING_SET" />
+    <!-- ★650 씨라7 ICC 차선 신호 탐색 — VHAL(CarPropertyManager) 제조사 속성 0x2140~0x2161 구독(비틀런처 AdasProbe와 동일 선언). 부여는 로컬 adb pm grant로 시도. -->
+    <uses-permission android:name="android.car.permission.CAR_VENDOR_EXTENSION" />
+
+    <application
+        android:name=".SnifferApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme">
+
+        <!-- ★710/713 최근 앱 목록에서 숨김(운영자 10-03 "업데이트 뒤 활성앱에 릴레이가 두 개") — 업데이트·감시 부활의 am start가 새 카드를 만들어 옛 카드와 두 장이 되던 것. 목록에서 쓸어 꺼지는 일도 줄인다 -->
+        <activity
+            android:name=".MainActivity"
+            android:excludeFromRecents="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ★센트리 녹화 보기(10-08) — 헤드유닛에서 달력·목록·재생. 릴레이 자신의 /sentry/web 페이지를 WebView로 연다(운영자판만 버튼 노출) -->
+        <activity
+            android:name=".SentryViewerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
+
+        <!-- ★v209 주차 중 화면 깨우기 — 투명 Activity 윈도우 플래그(FLAG_TURN_SCREEN_ON) -->
+        <activity
+            android:name=".WakeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- ★574 시동 ON 업데이트 안내 — 자동 업데이트가 조용히 실패하는 차(구버전 정체)를 위해 화면에 한 번 띄운다.
+             투명 테마 = 현재 화면 위에 다이얼로그만 얹힘. 주행 시작하면 onStop에서 스스로 닫는다. -->
+        <activity
+            android:name=".UpdatePromptActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- ★분할 고스트(2026-09-11): 셸 am start(windowingMode 3)로 도킹 스택 생성용. exported 필수(셸 실행), resizeable 필수(분할 진입). -->
+        <activity
+            android:name=".SplitGhostActivity"
+            android:exported="true"
+            android:resizeableActivity="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.cseini.bydsniffer.splitghost"
+            android:theme="@android:style/Theme.NoTitleBar" />
+
+        <service
+            android:name=".SnifferService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
+        <!-- 상시생존 강화 — 접근성 서비스. ★v48: diplus KDService 방식 = 별도 프로세스(:relay)+포그라운드+접근성 3중.
+             메인(SnifferService) 프로세스가 원격끔 킬로 죽어도 이 프로세스는 분리돼 살아남아 메인을 되살린다. -->
+        <service
+            android:name=".KeepAliveAccessibilityService"
+            android:exported="true"
+            android:process=":relay"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/keepalive_accessibility" />
+        </service>
+
+        <!-- ★v214 :relay 프로세스 warm 유지 앵커 — a11y 얼어붙음(딥슬립/업데이트 후 미바인드) 방지 -->
+        <service
+            android:name=".RelayAnchorService"
+            android:exported="false"
+            android:process=":relay"
+            android:foregroundServiceType="specialUse" />
+
+        <!-- 헤드유닛 재부팅(시동 ON) 후 릴레이 서비스 자동 시작 — 일렉트로 동일 priority 9900 + LOCKED_BOOT -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter android:priority="9900">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="com.byd.action.ACC_ON" />
+                <action android:name="com.byd.action.IGN_ON" />
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 상시생존 이중화 — JobScheduler 백스톱(알람과 별개로 서비스 사망 시 재기동, 재부팅 후에도 persist) -->
+        <service
+            android:name=".SnifferJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.cseini.bydsniffer.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/provider_paths" />
+        </provider>
+        <!-- ★650 android.car(Car/CarPropertyManager) 클래스 로드용 — D5에만 있음, 없는 차(D3)는 required=false라 설치 영향 없음. -->
+        <uses-library android:name="android.car" android:required="false" />
+    </application>
+
+</manifest>

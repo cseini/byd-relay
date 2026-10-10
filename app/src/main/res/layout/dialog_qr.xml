@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★2026-09-16 운영자 지적 — QR 상시노출 대신 버튼→팝업으로. MainActivity.showQrDialog()가 채운다. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#0E1116">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="18dp">
+
+        <ImageView
+            android:id="@+id/qrDialogImage"
+            android:layout_width="240dp"
+            android:layout_height="240dp"
+            android:layout_gravity="center"
+            android:layout_marginBottom="10dp"
+            android:background="#FFFFFF"
+            android:padding="10dp"
+            android:contentDescription="릴레이 등록 QR" />
+
+        <TextView
+            android:id="@+id/qrDialogHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="#34D399"
+            android:gravity="center"
+            android:layout_marginBottom="14dp" />
+
+        <TextView
+            android:id="@+id/qrDialogCodes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="#B8C0CC"
+            android:gravity="center" />
+
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★847 메인 화면 재구성(운영자 10-08 승인 설계) — 분야별 칸(연결·센트리·도구·시스템), 통신 복구는 버튼 하나→팝업(dialog_netrecover),
+     뒷좌석 착좌는 체크하면 팝업(dialog_seat). 버튼 id는 예전 그대로라 MainActivity 연결 코드가 같다. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0E1116"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="16dp">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="링크락 릴레이"
+                android:textSize="26sp"
+                android:textStyle="bold"
+                android:textColor="#E6EAF0" />
+            <TextView
+                android:id="@+id/versionTextView"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="14dp"
+                android:text="버전 —"
+                android:textSize="15sp"
+                android:textColor="#8A93A2" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:baselineAligned="false">
+
+            <!-- 1칸: 연결 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card"
+                android:padding="20dp"
+                android:layout_marginEnd="8dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="연결" android:textSize="18sp" android:textStyle="bold" android:textColor="#8A93A2" android:layout_marginBottom="12dp" />
+                <TextView
+                    android:id="@+id/statusTextView"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="상태 확인 중…"
+                    android:textSize="15sp"
+                    android:textColor="#B8C0CC"
+                    android:lineSpacingExtra="3dp"
+                    android:padding="14dp"
+                    android:background="@drawable/bg_panel" />
+                <!-- ★2026-09-16 운영자 지적 — QR은 화면에 상시 노출하지 않고 버튼→팝업(showQrDialog가 dialog_qr.xml을 채움). -->
+                <Button android:id="@+id/qrButton" android:layout_width="match_parent" android:layout_height="64dp" android:layout_marginTop="12dp"
+                    android:text="폰과 동기화 (QR)" android:textSize="18sp" android:textStyle="bold" android:textColor="#0E1116" android:textAllCaps="false"
+                    android:background="@drawable/bg_btn_primary" android:visibility="gone" />
+                <ImageView android:id="@+id/webQrImageView" android:layout_width="200dp" android:layout_height="200dp" android:layout_gravity="center"
+                    android:visibility="gone" android:background="#FFFFFF" android:padding="8dp" android:contentDescription="웹 리모컨 QR" />
+                <TextView android:id="@+id/webUrlView" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone" />
+                <Button android:id="@+id/relayButton" android:layout_width="match_parent" android:layout_height="56dp" android:layout_marginTop="10dp"
+                    android:text="수동 입력 (동기화가 안 될 때만)" android:textSize="15sp" android:textColor="#B8C0CC" android:textAllCaps="false"
+                    android:background="@drawable/bg_btn" />
+            </LinearLayout>
+
+            <!-- 2칸: 센트리 + 도구 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp">
+                <LinearLayout
+                    android:id="@+id/sentrySection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/bg_card"
+                    android:padding="20dp"
+                    android:layout_marginBottom="16dp"
+                    android:visibility="gone">
+                    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="센트리" android:textSize="18sp" android:textStyle="bold" android:textColor="#8A93A2" android:layout_marginBottom="12dp" />
+                    <Button android:id="@+id/sentryViewButton" android:layout_width="match_parent" android:layout_height="72dp"
+                        android:text="녹화 보기" android:textSize="20sp" android:textStyle="bold" android:textColor="#0E1116" android:textAllCaps="false"
+                        android:background="@drawable/bg_btn_primary" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/bg_card"
+                    android:padding="20dp">
+                    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="도구" android:textSize="18sp" android:textStyle="bold" android:textColor="#8A93A2" android:layout_marginBottom="12dp" />
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                        <Button android:id="@+id/sendLogButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="64dp" android:layout_marginEnd="6dp"
+                            android:text="로그 보내기" android:textSize="16sp" android:textColor="#E6EAF0" android:textAllCaps="false" android:background="@drawable/bg_btn" />
+                        <Button android:id="@+id/updateButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="64dp" android:layout_marginStart="6dp"
+                            android:text="업데이트 확인" android:textSize="16sp" android:textColor="#E6EAF0" android:textAllCaps="false" android:background="@drawable/bg_btn" />
+                    </LinearLayout>
+                    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="로그 보내기는 문제가 있을 때만 누르세요." android:textSize="13sp" android:textColor="#8A93A2" android:layout_marginTop="6dp" />
+                    <Button android:id="@+id/netRecoverButton" android:layout_width="match_parent" android:layout_height="60dp" android:layout_marginTop="14dp"
+                        android:text="통신 복구 · 셀룰러가 안 될 때만" android:textSize="16sp" android:textStyle="bold" android:textColor="#F2994A" android:textAllCaps="false"
+                        android:background="@drawable/bg_btn_warn" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- 3칸: 시스템 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/bg_card"
+                android:padding="20dp"
+                android:layout_marginStart="8dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="시스템" android:textSize="18sp" android:textStyle="bold" android:textColor="#8A93A2" android:layout_marginBottom="12dp" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                    <Button android:id="@+id/autostartButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:layout_marginEnd="6dp"
+                        android:text="오토스타트 해제" android:textSize="15sp" android:textColor="#B8C0CC" android:textAllCaps="false" android:background="@drawable/bg_btn" />
+                    <Button android:id="@+id/autostartTargetsButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:layout_marginStart="6dp"
+                        android:text="해제 대상 앱" android:textSize="15sp" android:textColor="#B8C0CC" android:textAllCaps="false" android:background="@drawable/bg_btn" />
+                </LinearLayout>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="앱 업데이트·재부팅 뒤 자동 시작이 막히면 눌러 해제합니다. '해제 대상 앱'에서 자동 해제할 앱을 고릅니다." android:textSize="13sp" android:textColor="#8A93A2" android:layout_marginTop="8dp" />
+
+                <LinearLayout
+                    android:id="@+id/seatSection"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+                    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#262C36" android:layout_marginTop="16dp" android:layout_marginBottom="14dp" />
+                    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="시험 기능 (운영자판)" android:textSize="15sp" android:textStyle="bold" android:textColor="#8A93A2" android:layout_marginBottom="8dp" />
+                    <CheckBox
+                        android:id="@+id/seatCheck"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="56dp"
+                        android:background="@drawable/bg_btn"
+                        android:buttonTint="#2BC4D8"
+                        android:paddingStart="8dp"
+                        android:text="뒷좌석 착좌 보기 (체크하면 팝업)"
+                        android:textSize="16sp"
+                        android:textColor="#E6EAF0" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
