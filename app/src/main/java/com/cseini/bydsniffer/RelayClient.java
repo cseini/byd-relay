@@ -745,10 +745,6 @@ public class RelayClient {
                 || action.startsWith("DUMP") || action.startsWith("PROBEINT ") || action.startsWith("CONSTS ") || action.startsWith("READFEAT ")   // ★2026-09-10 신규 진단 2종 — 여기 빠져 있어 '서명 검증 실패'로 거부되던 것
                 || action.equals("BLE_ADV") || action.equals("WAKE_MCU") || action.equals("ADB_AUTH")
                 || action.equals("A11YDUMP") || action.equals("A11YCAP") || action.equals("A11YREBIND") || action.startsWith("INSTALLAPK ")
-                || action.equals("ALLEVT")   // ★833 전체 이벤트 덤프(운영자판 돌핀 착좌 이벤트 탐색, 관찰 전용)
-                || action.equals("ADEVDUMP")   // ★834 전 장치 getter 전수(관찰 전용)
-                || action.equals("BELTMON")   // ★835 벨트 모니터(관찰 전용)
-                || action.equals("MODEMON")   // ★860 주행모드 모니터(관찰 전용)
                 || action.equals("CARPROBE") || action.equals("CAMPROBE") || action.equals("CAMOPEN") || action.equals("PULLFILE") || action.equals("CAMSHOT") || action.equals("CAMSTREAM") || action.equals("CAMH264") || action.equals("CAMH264LIVE") || action.equals("APPOPSPROBE") || action.startsWith("LOCALFLASH") || action.equals("LIGHTPROBE") || action.equals("BRAKEPROBE") || action.equals("RADARPROBE") || action.startsWith("SEATPROBE") || action.equals("IGNPROBE") || action.equals("FCSRPROBE") || action.equals("SCREENWAKE") || action.equals("GRANTPERMS") || action.equals("SETCLOUDCREDS") || action.equals("CARBLESCAN")
                 || action.equals("SPLITPROBE")   // ★앱런처(LAUNCHAPP·SPLIT·APPLIST)는 2026-09-11 운영자 지시로 공유판 개방 → systemDanger서 빼서 K서명(requireVerify) 경로. SPLITPROBE(진단)만 op 전용.
                 || action.equals("CAMDUALPROBE") || action.startsWith("BSDEXP")

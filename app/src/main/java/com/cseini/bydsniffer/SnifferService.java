@@ -24,7 +24,6 @@ import android.util.Log;
 import androidx.core.app.NotificationCompat;
 
 import com.cseini.bydsniffer.sentry.SentryHost;
-import com.cseini.bydsniffer.sentry.BsdVision;
 import com.cseini.bydsniffer.sentry.SentryManager;
 
 import java.io.File;
@@ -208,7 +207,7 @@ public class SnifferService extends Service {
     private volatile boolean accActive = false;
 
     public String sentrySelfGrant() { RelayClient rc = relay; return rc != null ? rc.selfSentryGrantQuery() : null; }   // ★녹화 보기 화면이 공유판에서도 열리게
-    public boolean sentryEnabled() { try { return SentryManager.get().enabled(); } catch (Throwable t) { return false; } }   // ★메인 화면 센트리 칸(켠 차만)
+    public boolean sentryEnabled() { try { return com.cseini.bydsniffer.sentry.SentryManager.get().enabled(); } catch (Throwable t) { return false; } }   // ★메인 화면 센트리 칸(켠 차만)
     public static SnifferService getInstance() {
         return instance;
     }
@@ -414,15 +413,10 @@ public class SnifferService extends Service {
             initIccAudio();   // ★v115 ICC 오프 효과음 SoundPool 준비
             bsdExp.enabled = prefs != null && prefs.getBoolean("bsdexp_enabled", true);   // ★602 BSD실험 활성 상태
             // ★센트리 1단계(DiLink3 전용, 공유판 포함 — 기본 꺼짐이라 켠 차만 동작) — startRelay 앞이어야 릴레이가 보내는 초기 시동 이벤트가 안 버려진다. init 실패가 onCreate를 끊지 않게 격리.
-            if (!DiLink5Support.isDiLink5() || BuildConfig.D5_SENTRY) {   // ★씨라7은 -PD5_SENTRY=true 시험판에서만(운영자 10-10), 저장소는 내장 고정
-                if (DiLink5Support.isDiLink5()) com.cseini.bydsniffer.sentry.SentrySettings.setInternalOnly(true);
+            if (!DiLink5Support.isDiLink5()) {
                 try { SentryManager.get().init(sentryHost()); } catch (Throwable t) { postToD1("SENTRY", "init 실패: " + t); }
             }
-            if (!DiLink5Support.isDiLink5()) {
-                try { BsdVision.get().setHost(bsdVisionHost()); } catch (Throwable t) { postToD1("BSDVISION", "init 실패: " + t); }
-            }
             startRelay();
-            if (relay != null && DiLink5Support.isDiLink5() && BuildConfig.D5_SENTRY) relay.putStatus("sentry_d5", "1");   // ★씨라7 센트리 시험판 표지 — 앱이 개발자 모드(로고 10탭)에서만 센트리 메뉴를 보일 때 이 값을 본다
             if (relay != null && DiLink5Support.isDiLink5() && prefs != null) relay.putStatus("d5cam_mode", prefs.getString("d5cam_mode", "legacy"));   // ★712 씨라7 카메라 방식(앱 토글 표시용) ★722 기본 legacy(공유판 721 실차 2대 4분할 2칸 까맣게 — 운영자 "722로 기본 기존")
             if (IS_D5) { loadD5Slots(); publishClusterCamCfg(); }   // ★745 씨라7 보조 칸 배치 불러오기 + 앱에 켬·칸 알림
             if (relay != null && btAudioCutOn()) relay.putStatus("bt_audio_off", 1);   // ★715 오디오 끊기 켠 차 표시 ★810 운영자판은 기본 켬
@@ -867,7 +861,6 @@ public class SnifferService extends Service {
         usbKeepSd(active, why);
         if (!active) { releaseUsbKeepLock(); return; }
         long now = System.currentTimeMillis();
-        wifiKeepTick(now);
         if (mode == 3) { releaseUsbKeepLock(); usbKeepShellWake(now); return; }
         if (mode != 1) {
             try {
@@ -2111,7 +2104,6 @@ public class SnifferService extends Service {
             if ("SENTRY_CLEAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().clearAll(params != null ? params.optString("confirm") : null).toString()); return null; }   // ★녹화 전체 삭제 — confirm:"all" 필수, 지우기는 뒤에서 이어짐
             if ("SENTRY_CALENDAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteCalendar(params != null ? params.optString("month") : null).toString()); return null; }   // ★집에서 보는 달력 — 한 달치 날짜별 이벤트 수
             if ("SENTRY_MARKS".equals(action)) {   // ★집에서 보는 시간축 표시·객체 판정(운영자판 10-09) — marks·objects·알림 사진(7200자 이내)
-                if (!BuildConfig.IS_OPERATOR) return "센트리 표시는 운영자판 전용";
                 RelayClient.RESULT_DATA.set(SentryManager.get().remoteMarks(params != null ? params.optString("id") : null).toString()); return null;
             }
             if ("SENTRY_THUMB".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteThumb(params != null ? params.optString("id") : null).toString()); return null; }   // ★집에서 보는 썸네일 base64 6000자 이내
@@ -2129,7 +2121,7 @@ public class SnifferService extends Service {
         if ("CAMH264LIVE".equals(action)) return camH264Stream(params);   // ★v195 H.264 라이브(지속연결→워커→폰 WebCodecs)
         if ("CAMRTC".equals(action)) return camRtc(params);   // ★v266 WebRTC P2P — 카메라→libwebrtc→SRTP 폰 직결(워커=시그널링만)
         if ("SENTRY_RTC".equals(action)) {   // ★779 센트리 집에서 재생 — 폰과 데이터 채널 직결로 녹화 조각 전송(카메라 안 씀, 폰 K 서명 명령)
-            if (DiLink5Support.isDiLink5() && !BuildConfig.D5_SENTRY) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";
+            if (DiLink5Support.isDiLink5()) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";
             return sentryRtc(params);
         }
         if ("CARSET".equals(action)) { String out = "CARSET: " + carSet(params); postToD1("DILINK_CMD", out); return out; }   // ★v177 setProperty 쓰기(★2026-09-03 공유판도 허용 — 제어 테스트).
@@ -2278,7 +2270,6 @@ public class SnifferService extends Service {
             };
             btAudioInit();   // ★715 A2DP 싱크·HFP 프록시와 연결 상태 리시버(프로세스당 1회)
             registerAutotripStateReceiver();   // ★710/713 오토전비 적용 상태 → relay_state.autotrip_hud
-            registerWifiDiagReceiver();   // ★818 시동 꺼짐 뒤 와이파이·핫스팟 꺼짐 진단
             registerStorageReceivers();   // ★654 MEDIA_*·USB 탈착 이벤트 기록   // ★646 시작 앱 = 시동 켜짐 후(접근 시엔 시동 과정에서 화면이 뒤로 밀림)
             relay.powerLevelReader = () -> {      // ★AC_POWER_STATE 이벤트 수신 즉시 동기 판별용 getPowerLevel
                 try { double v = devDbl(deviceByName("bodywork"), "getPowerLevel"); return Double.isNaN(v) ? IgnitionTracker.NA : (int) v; }
@@ -2339,7 +2330,6 @@ public class SnifferService extends Service {
                 publishClusterCamCfg();   // ★617 커스텀 뷰 현재값(앱 편집기 초기값)
                 publishHuAssist();   // ★728 헤드유닛 카메라 창 켬 상태(폰 설정 화면 표시용)
                 if (!IS_D5) relay.putStatus("usb_keep_user", prefs.getBoolean("usb_keep_user", false) ? 1 : 0);   // ★753 USB 유지 토글 현재값(폰 부가기능 카드) — 씨라7은 안 보냄(폰이 카드 숨김)
-                if (!IS_D5) relay.putStatus("wifi_keep_user", prefs.getBoolean("wifi_keep_user", false) ? 1 : 0);   // ★820 와이파이 유지 토글 현재값(키가 있으면 폰이 USB 유지 아래에 스위치를 보임)
                 applyRebootGuard("릴레이 시작");
                 relay.putStatus("cluster_layout", prefs.getString("cluster_layout", ""));   // ★619 원격 편집기 초기값
                 relay.putStatus("ka_prev", prevKa);   // ★614 이전 프로세스의 마지막 상시생존 상태(재시작 전 절전이었는지)
@@ -2724,49 +2714,6 @@ public class SnifferService extends Service {
             }, new android.content.IntentFilter("com.cseini.bydsniffer.AUTOTRIP_STATE"));
         } catch (Throwable t) { postToD1("HUD", "오토전비 상태 리시버 등록 실패: " + t.getClass().getSimpleName()); }
     }
-    // ★818 운영자 10-06 "일렉트로에는 시동 꺼도 와이파이 켜는 게 있는데 우리도" — 유지 기능 전에 무엇이 언제 와이파이·핫스팟을 끄는지부터 기록(값 0~4 와이파이, 10~14 핫스팟).
-    private void registerWifiDiagReceiver() {
-        try {
-            final String AP = "android.net.wifi.WIFI_AP_STATE_CHANGED";
-            android.content.IntentFilter f = new android.content.IntentFilter();
-            f.addAction(android.net.wifi.WifiManager.WIFI_STATE_CHANGED_ACTION);
-            f.addAction(AP);
-            registerReceiver(new android.content.BroadcastReceiver() {
-                @Override public void onReceive(android.content.Context c, Intent it) {
-                    boolean ap = AP.equals(it.getAction());
-                    int st = it.getIntExtra("wifi_state", -1), prev = it.getIntExtra("previous_wifi_state", -1);
-                    if (!ap) wifiStateLast = st;
-                    android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
-                    postToD1("WIFI", (ap ? "핫스팟 " : "와이파이 ") + wifiStateName(prev) + "→" + wifiStateName(st)
-                            + " · 시동 " + (lastPowerLvl == 2 ? "켜짐" : lastPowerLvl == 0 ? "꺼짐" : "모름(" + lastPowerLvl + ")")
-                            + " · 화면 " + (pm != null && pm.isInteractive() ? "켜짐" : "꺼짐") + " · 기어 " + lastGearVal);
-                }
-            }, f);
-        } catch (Throwable t) { postToD1("WIFI", "리시버 등록 실패: " + t.getClass().getSimpleName()); }
-    }
-    // ★820 시동 꺼도 와이파이 유지(운영자 10-06 'ㄱㄱ', 일렉트로처럼 USB 유지 아래 종속) — 시동 OFF 순간 BYD 시스템이 와이파이를 끈다
-    //   (운영자 차 20:52:49 WifiController CMD_WIFI_TOGGLED→StaDisabled, 시동 ON 때 같은 방식으로 켬). AP가 깨어 있으면 다시 켠 뒤 유지됐다(20:55:17~21:00 실측).
-    //   USB 유지가 동작 중일 때만 부른다(보호 조건·시동 켜짐이면 안 부름). 꺼짐(1)일 때 30초에 한 번까지 셸 'svc wifi enable'.
-    private volatile int wifiStateLast = -1;
-    private long wifiKeepAt = 0;
-    private void wifiKeepTick(long now) {
-        if (prefs == null || !prefs.getBoolean("wifi_keep_user", false) || wifiStateLast != 1 || now - wifiKeepAt < 30_000L) return;
-        wifiKeepAt = now;
-        new Thread(() -> {
-            String r = AdbAccess.runShell(this, "svc wifi enable");
-            postToD1("WIFI", r == null ? "와이파이 유지 — 다시 켜기 실패(셸 연결 안 됨)" : "와이파이 유지 — 시동 꺼짐 뒤 꺼진 와이파이 다시 켬");
-        }, "wifikeep").start();
-    }
-    private static String wifiStateName(int s) {
-        switch (s % 10) {
-            case 0: return "끄는 중";
-            case 1: return "꺼짐";
-            case 2: return "켜는 중";
-            case 3: return "켜짐";
-            case 4: return s >= 10 ? "실패" : "모름";
-            default: return "?" + s;
-        }
-    }
     private void registerStorageReceivers() {
         try {
             android.content.IntentFilter mf = new android.content.IntentFilter();
@@ -2776,7 +2723,6 @@ public class SnifferService extends Service {
                 @Override public void onReceive(android.content.Context c, Intent it) {
                     String a = it.getAction() == null ? "?" : it.getAction().substring(it.getAction().lastIndexOf('.') + 1);
                     storageEvent("미디어 " + a + " " + it.getData());
-                    if (Intent.ACTION_MEDIA_MOUNTED.equals(it.getAction())) com.cseini.bydsniffer.sentry.SentryManager.get().onExternalMounted();   // ★813 내장에 대신 저장 중이던 센트리를 외장으로 복귀(시동 OFF 직후 SD가 무장보다 2초 늦게 붙던 것, 10-06 18:12)
                 }
             }, mf);
             android.content.IntentFilter uf = new android.content.IntentFilter();
@@ -3426,8 +3372,6 @@ public class SnifferService extends Service {
             }
             if (setM == null) return "base set(int,int,int) 없음";
             Object ret = setM.invoke(dev, devType, featureId, value);
-            // ★841 미지원/값없음(-2147482648)을 "OK"로 찍어 실패를 성공처럼 보이던 것(운영자 10-08 "실패했으면 실패라도 나와야지"). 0·그외는 기존대로 OK라 startsWith("OK") 판정 보존.
-            if (ret instanceof Number && ((Number) ret).intValue() == -2147482648) return "미적용(-2147482648)";
             return "OK(" + ret + ")";
         } catch (Throwable t) {
             Throwable c = (t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
@@ -3473,8 +3417,7 @@ public class SnifferService extends Service {
         // ★리모컨 앱런처(2026-09-11 운영자 승인, docs/AUTOSPLIT-ANALYSIS.md) — LAUNCHAPP <pkg> · SPLIT <pkg1> <pkg2> [pct] · SPLITRATIO <pct> · APPLIST
         //   주차(P)·비주행에서만(주행 중 헤드유닛 화면 급변 방지). 결과는 D1 SPLIT 로그 + relay_state remote_split.
         if (a.equals("SPLITPROBE")) { new Thread(() -> postToD1("SPLIT", SplitLauncher.probe(this)), "splitprobe").start(); return "SPLITPROBE — 로그(SPLIT) 확인"; }
-        if (a.startsWith("LAUNCHAPP ") || a.startsWith("SPLIT ") || a.startsWith("SPLITRATIO ") || a.equals("APPLIST")
-                || a.startsWith("LAUNCHFF ") || a.startsWith("WINRESIZE ") || a.startsWith("WINFRONT ")) return appLauncherCmd(action.trim());   // ★861 자유 창 3종(링크락 런처 A안)
+        if (a.startsWith("LAUNCHAPP ") || a.startsWith("SPLIT ") || a.startsWith("SPLITRATIO ") || a.equals("APPLIST")) return appLauncherCmd(action.trim());
         // ★트렁크 클라우드(2026-09-11) — 웹 세컨드스크린/돌핀용. TRUNK {kind:TRUNK_OPEN|TRUNK_CLOSE} 또는 "TRUNK open|close". 릴레이가 쥔 SETCLOUDSESS 세션으로 OPENTRUNK/CLOSETRUNK.
         if (a.equals("TRUNK") || a.startsWith("TRUNK ")) return trunkCmd(action.trim(), null);   // 문자열형("TRUNK open|close"); JSON형은 웹 /cmd(webRunCommand)서 처리
         // ★v123 원격 self-update — 차 안 갈 필요 없이 최신 릴레이 APK를 내려받아 무음 설치+재시작. autostart-blocker도 우회.
@@ -3557,7 +3500,7 @@ public class SnifferService extends Service {
             case "UNLOCK": r = doorCmd(0, log); break;
             case "WINDOW_OPEN":    r = windowCtrl(1); break;   // 확정: 1=완전 열기
             case "WINDOW_CLOSE":   r = windowCtrl(2); break;   // 확정: 2=완전 닫기
-            case "SUNSHADE_OPEN":  r = DiLink5Support.isDiLink5() ? callIntMethod(getBodyworkDevice(), "voiceCtlSunshadePanel", 1) : callIntMethod(getBodyworkDevice(), "setSunshadeState", 100); break;   // ★D5=voiceCtl(1열기) · ★854 D3는 % 세터라 1이 아니라 100(전체 열기)
+            case "SUNSHADE_OPEN":  r = DiLink5Support.isDiLink5() ? callIntMethod(getBodyworkDevice(), "voiceCtlSunshadePanel", 1) : callIntMethod(getBodyworkDevice(), "setSunshadeState", 100); break;   /* ★833 D3는 % 세터라 1이 아니라 100(전체 열기) */   // ★D5=voiceCtl(1열기)
             case "SUNSHADE_CLOSE": r = DiLink5Support.isDiLink5() ? callIntMethod(getBodyworkDevice(), "voiceCtlSunshadePanel", 2) : callIntMethod(getBodyworkDevice(), "setSunshadeState", 0); break;   // ★D5=voiceCtl(2닫기)
             case "WAKE_MCU":   { Object p = deviceByName("power"); r = (p == null) ? "power null" : callIntMethod(p, "wakeUpMcu"); } break;
             case "DUMP_LIFEPROBE": {   // ★685 셸 프로세스(app_process)에서 BYD SDK 호출 가능성 시험(읽기 전용)
@@ -3588,10 +3531,6 @@ public class SnifferService extends Service {
             case "D5CAMPROBE":  new Thread(this::d5CamProbeAll, "d5camprobe").start(); r = "D5CAMPROBE 시작 — camId 0~3 순차 캡처 후 업로드"; break;   // ★2026-09-16 쿼드 방향/실채널 확인용 — 4개 다 전방과 같은지 진단
             case "CAMOPEN":     r = camOpenTest(); break;   // ★v186 openCamera 게이트 테스트(bydcameramanager registerUser+openCamera 권한통과 여부)
             case "CARPROBE":    r = carProbe(); break;   // ★v172 DiCar CarServiceProvider 도달성 테스트(재실/뒷좌석벨트 ICarPropertyManager 채널 접근 가능성)
-            case "ALLEVT":      allEvtUntil = System.currentTimeMillis() + 180_000L; allEvtLast.clear(); allEvtTs.clear(); postToD1("EVTDUMP", "전체 이벤트 덤프 180초 시작 — 지금 좌석에 타고 내려 주세요"); r = "전체 이벤트 덤프 180초 시작"; break;   // ★833 돌핀 착좌 이벤트 탐색
-            case "ADEVDUMP":    r = allDeviceDump(); break;   // ★834 모든 BYDAuto 장치의 모든 getter 전수 호출(COMMON 권한으로 읽히는 승객·점유 값 찾기, 관찰 전용)
-            case "MODEMON":     startModeMon(); r = "주행모드 모니터 300초 시작(1초)"; break;   // ★860 에코/노말 구분 신호 관찰(운영자 10-09 'ㄱㅇㅇ')
-            case "BELTMON":     startBeltMon(); r = "벨트 모니터 300초 시작(1.5초 실시간)"; break;   // ★836 돌핀 착좌 역산 — 1.5초 실시간 폴링
             case "GRANTPERMS":  r = grantPerms(); break;   // ★v180 Overdrive 방식 — 앱 self pm grant로 도메인별 BYDAUTO_*_SET 권한 부여 시도(어느 게 grantable인지)
             case "APPOPSPROBE": r = appOpsProbe(); break;   // ★v175 오토스타트금지 직접해제 테스트(bg_datacache.setAppOpsData 리플렉션 — 가디언 a11y 대체 후보)
             default:       r = "'" + action + "' 미배선"; break;
@@ -3941,235 +3880,6 @@ public class SnifferService extends Service {
         if (lo != null && lo != lastLowBeam) { lastLowBeam = lo; relay.putState("low_beam", lo); }
         if (hi != null && hi != lastHighBeam) { lastHighBeam = hi; relay.putState("high_beam", hi); }
     }
-    // ★821 순정 블랙박스(com.byd.cdr) 워터마크 항목을 클러스터에(운영자 10-06) — 블랙박스 CdrAutoService의 읽기 방식 그대로:
-    //   브레이크 setting SET_VCU_BREAK_PEDAL_STATS_S(1=밟음) · 가속 speed SPEED_ACCELERATOR_VALID_FLAG==1일 때 getAccelerateDeepness()(0~100)
-    //   · 조명 light.getLightStatus(1 차폭·2 하향·3 상향·7 뒤 안개, 1=켜짐 — sys.car.protocol이 CANFD면 뒤 안개는 LIGHT_REAR_FOG_LAMPS)
-    //   · 운전석 벨트 instrument.getSafetyBeltStatus(1)(값 뜻 실차 확인 전이라 원값만). 키마다 처음 5번 바뀔 때 CDRSIG 로그(해석 확인용).
-    private final java.util.Map<String, Integer> cdrLast = new java.util.HashMap<>(), cdrLogN = new java.util.HashMap<>();
-    private Boolean cdrCanFd;
-    private void publishCdrSignals() {
-        if (relay == null || IS_D5) return;
-        if (cdrCanFd == null) {
-            try { cdrCanFd = "CANFD".equals(Class.forName("android.os.SystemProperties").getMethod("get", String.class).invoke(null, "sys.car.protocol")); }
-            catch (Throwable t) { cdrCanFd = false; }
-            postToD1("CDRSIG", "차 통신 방식 sys.car.protocol " + (cdrCanFd ? "CANFD" : "CAN(또는 없음)"));
-        }
-        Object ld = deviceByName("light"), sd = deviceByName("speed"), st = deviceByName("setting"), in = deviceByName("instrument");
-        cdrPut("side_light", ld != null ? callGetInt(ld, "getLightStatus", 1) : NA, "getLightStatus(1)");
-        cdrPut("low_beam_ls", ld != null ? callGetInt(ld, "getLightStatus", 2) : NA, "getLightStatus(2)");
-        cdrPut("high_beam_ls", ld != null ? callGetInt(ld, "getLightStatus", 3) : NA, "getLightStatus(3)");
-        cdrPut("rear_fog", cdrCanFd ? cdrFeat(ld, "LIGHT_REAR_FOG_LAMPS") : (ld != null ? callGetInt(ld, "getLightStatus", 7) : NA), cdrCanFd ? "LIGHT_REAR_FOG_LAMPS" : "getLightStatus(7)");
-        cdrPut("brake_pedal", cdrFeat(st, "SET_VCU_BREAK_PEDAL_STATS_S"), "SET_VCU_BREAK_PEDAL_STATS_S");
-        int accOk = cdrFeat(sd, "SPEED_ACCELERATOR_VALID_FLAG");
-        boolean accUnknown = accOk == NA || accOk == -1 || accOk == -2147482648;
-        cdrPut("accel_pct", accUnknown || sd == null ? NA : accOk == 1 ? callGetInt0(sd, "getAccelerateDeepness") : 0, "getAccelerateDeepness(유효 " + accOk + ")");
-        cdrPut("belt_main", in != null ? callGetInt(in, "getSafetyBeltStatus", 1) : NA, "getSafetyBeltStatus(1)");
-    }
-    // ★824 돌핀 좌석 착석 탐색(운영자 10-07 'ㄱㄱ', 피드백 세션 요청) — 씨라7은 Setting getPassengerState*로 벨트 없이 착석(1 빈·2 앉음)이 읽혔다.
-    //   돌핀은 시도한 적 없음. setting·safetybelt·bodywork·instrument 장치에서 이름에 passenger·seat·belt·occup이 든 게터(인자 없음, 또는 int 하나 0~5)와
-    //   같은 단어가 든 기능 값을 5초마다 읽어 바뀐 것만 D3SEAT로(처음 1회 이름 전체). 통풍·열선·안마·위치 기억 같은 제어 값은 뺀다. 읽기만.
-    private static final java.util.regex.Pattern D3SEAT_NAME = java.util.regex.Pattern.compile("(?i)passenger|seat|belt|occup");
-    private static final java.util.regex.Pattern D3SEAT_SKIP = java.util.regex.Pattern.compile("(?i)ventilat|heat|massag|memory|position|adjust|fold|welcome|easy");
-    private long d3SeatAt = 0, d3SeatWin = 0; private int d3SeatLogN = 0;
-    private java.util.List<Object[]> d3SeatProbes;   // {이름, 장치, Method 또는 featureId(Integer), 인자(Integer 또는 null)}
-    private final java.util.Map<String, String> d3SeatLast = new java.util.HashMap<>();
-    private final java.util.Map<String, Integer> d3SeatFlips = new java.util.HashMap<>();   // ★830 시간당 바뀐 횟수 — 6초마다 0↔1 흔들리는 값이 시간당 60줄 한도를 다 먹어 17:24 뒤 기록이 끊겼다
-    private final java.util.Set<String> d3SeatNoisy = new java.util.HashSet<>();
-    private void d3SeatTick() {
-        if (IS_D5 || relay == null) return;
-        long now = System.currentTimeMillis();
-        if (now - d3SeatAt < 5000) return;
-        d3SeatAt = now;
-        try {
-            if (d3SeatProbes == null) {
-                d3SeatProbes = new java.util.ArrayList<>();
-                String[] doms = {"setting", "safetybelt", "bodywork", "instrument"};
-                java.util.Map<String, String> featPre = new java.util.HashMap<>();
-                featPre.put("setting", "SET"); featPre.put("safetybelt", "SAFETY_BELT"); featPre.put("bodywork", "BODYWORK"); featPre.put("instrument", "INSTRUMENT");
-                java.util.List<java.lang.reflect.Field> feats = new java.util.ArrayList<>();
-                try { for (java.lang.reflect.Field f : Class.forName("android.hardware.bydauto.BYDAutoFeatureIds").getDeclaredFields())
-                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) && f.getType() == Integer.TYPE && D3SEAT_NAME.matcher(f.getName()).find() && !D3SEAT_SKIP.matcher(f.getName()).find()) feats.add(f); }
-                catch (Throwable t) { postToD1("D3SEAT", "기능 ID 목록 실패 " + rootMsg(t)); }
-                for (String dom : doms) {
-                    Object dev = deviceByName(dom);
-                    if (dev == null) { postToD1("D3SEAT", dom + " 장치 없음"); continue; }
-                    StringBuilder all = new StringBuilder();
-                    for (java.lang.reflect.Method m : dev.getClass().getMethods()) {
-                        String n = m.getName();
-                        if (!(n.startsWith("get") || n.startsWith("is")) || !D3SEAT_NAME.matcher(n).find()) continue;
-                        Class<?>[] pt = m.getParameterTypes(); Class<?> rt = m.getReturnType();
-                        boolean okRt = rt == int.class || rt == boolean.class;
-                        all.append(n).append(pt.length == 0 ? "()" : pt.length == 1 && pt[0] == int.class ? "(int)" : "(…)").append(okRt ? "" : ":" + rt.getSimpleName()).append(' ');
-                        if (!okRt || D3SEAT_SKIP.matcher(n).find()) continue;
-                        if (pt.length == 0) d3SeatProbes.add(new Object[]{dom + "." + n, dev, m, null});
-                        else if (pt.length == 1 && pt[0] == int.class) for (int i = 0; i <= 5; i++) d3SeatProbes.add(new Object[]{dom + "." + n + "(" + i + ")", dev, m, i});
-                    }
-                    String pre = featPre.get(dom);
-                    for (java.lang.reflect.Field f : feats)
-                        if (f.getName().startsWith(pre)) { try { d3SeatProbes.add(new Object[]{dom + ":" + f.getName(), dev, f.getInt(null), null}); } catch (Throwable ignored) {} }
-                    postToD1("D3SEAT", dom + " 게터 이름 전체: " + (all.length() == 0 ? "(없음)" : all.toString().trim()));
-                }
-                postToD1("D3SEAT", "읽을 항목 " + d3SeatProbes.size() + "개(제어 값 제외)");
-            }
-            StringBuilder chg = new StringBuilder();
-            boolean first = d3SeatLast.isEmpty();
-            // ★830 접근성이 벨트·좌석 경고 팝업을 보면 파일(seat_dump_req)로 알려 온다 → 그 순간 값 전체를 한 번 남긴다(한도·흔들림 제외와 무관)
-            java.io.File req = new java.io.File(getFilesDir(), "seat_dump_req");
-            String reqWhy = null;
-            if (req.exists()) { try (java.io.FileInputStream in = new java.io.FileInputStream(req)) { byte[] b = new byte[256]; int k = in.read(b); reqWhy = k > 0 ? new String(b, 0, k, "UTF-8").trim() : ""; } catch (Throwable t) { reqWhy = "?"; } req.delete(); }
-            StringBuilder all = reqWhy != null ? new StringBuilder() : null;
-            if (now - d3SeatWin > 3_600_000L) { d3SeatWin = now; d3SeatLogN = 0; d3SeatFlips.clear(); }
-            if (d3SeatPwLast == 2 && lastPowerLvl != 2) postToD1("D3SEAT", "시동 OFF 순간 벨트 알림 상태 " + (beltRem.isEmpty() ? "(받은 적 없음)" : beltRem.toString()) + " · 시동=" + lastPowerLvl);   // ★831
-            if (d3SeatPwLast != 2 && lastPowerLvl == 2 && d3SeatPwLast != -9) postToD1("D3SEAT", "시동 ON 순간 벨트 알림 상태 " + (beltRem.isEmpty() ? "(받은 적 없음)" : beltRem.toString()));
-            d3SeatPwLast = lastPowerLvl;
-            for (Object[] p : d3SeatProbes) {
-                String v;
-                try {
-                    Object r = p[2] instanceof java.lang.reflect.Method
-                            ? (p[3] == null ? ((java.lang.reflect.Method) p[2]).invoke(p[1]) : ((java.lang.reflect.Method) p[2]).invoke(p[1], p[3]))
-                            : (Object) getFeatureInt(p[1], (Integer) p[2]);
-                    v = r instanceof Boolean ? ((Boolean) r ? "1" : "0") : String.valueOf(r);
-                    if (String.valueOf(NA).equals(v)) v = "na";
-                } catch (Throwable t) { v = "예외:" + rootMsg(t); }
-                String prev = d3SeatLast.put((String) p[0], v);
-                if (all != null && !"na".equals(v) && !v.startsWith("-21474826")) all.append(p[0]).append('=').append(v).append(' ');
-                if (prev == null || !prev.equals(v)) {
-                    if (prev != null && d3SeatNoisy.contains((String) p[0])) continue;
-                    if (prev != null && d3SeatFlips.merge((String) p[0], 1, Integer::sum) > 6) {
-                        d3SeatNoisy.add((String) p[0]);
-                        postToD1("D3SEAT", "흔들림 많음(시간당 6번 넘게 바뀜) → 변화 기록에서 뺌: " + p[0] + " (팝업 순간 전체 기록엔 계속 포함)");
-                        continue;
-                    }
-                    chg.append(p[0]).append('=').append(prev == null ? "" : prev + "→").append(v).append(' ');
-                }
-            }
-            if (all != null) {
-                String a = all.toString().trim();
-                for (int i = 0; i < Math.max(1, a.length()); i += 1700)
-                    postToD1("D3SEAT", "팝업 순간 전체(" + reqWhy + ") 벨트 알림 " + beltRem + " 속도=" + (Double.isNaN(lastSpeed) ? "?" : String.valueOf((int) Math.round(lastSpeed))) + " 시동=" + lastPowerLvl + " | " + (a.isEmpty() ? "(값 있는 항목 없음)" : a.substring(i, Math.min(a.length(), i + 1700))));
-            }
-            if (chg.length() == 0) return;
-            if (++d3SeatLogN > 60) return;
-            String s = chg.toString().trim();
-            for (int i = 0; i < s.length(); i += 1700)
-                postToD1("D3SEAT", (first ? "처음 " : "변화 ") + "속도=" + (Double.isNaN(lastSpeed) ? "?" : String.valueOf((int) Math.round(lastSpeed))) + " 시동=" + lastPowerLvl + " | " + s.substring(i, Math.min(s.length(), i + 1700)));
-        } catch (Throwable t) { postToD1("D3SEAT", "예외 " + rootMsg(t)); }
-    }
-    // ★834 전 장치 getter 전수 조사(운영자 10-07 "다른 방법 찾아줘") — 좌석 점유(getPassengerStatus 등)가 권한(GET=signature) 막힌 getProperty 말고
-    //   COMMON 권한으로 바로 잡은 device의 getter로 읽히는지. seat 전용 장치(BYDAutoSeatDevice) 포함 지금껏 안 본 장치까지. 인자 없음 + int 하나(0~5)만, 읽기만.
-    private String allDeviceDump() {
-        String[] doms = {"seat", "safetybelt", "bodywork", "instrument", "setting", "doorlock", "power", "ac", "light", "energy", "charging", "radar", "panorama", "gearbox", "speed", "statistic", "adas", "audio"};
-        int shown = 0;
-        for (String dom : doms) {
-            Object dev;
-            try { dev = deviceByName(classNameFor(dom)); } catch (Throwable t) { postToD1("ADEV", dom + " 장치 예외 " + rootMsg(t)); continue; }
-            if (dev == null) { postToD1("ADEV", dom + " 장치 없음"); continue; }
-            StringBuilder sb = new StringBuilder();
-            for (java.lang.reflect.Method m : dev.getClass().getMethods()) {
-                String n = m.getName();
-                if (!(n.startsWith("get") || n.startsWith("is"))) continue;
-                Class<?>[] pt = m.getParameterTypes(); Class<?> rt = m.getReturnType();
-                if (!(rt == int.class || rt == boolean.class)) continue;
-                boolean interesting = java.util.regex.Pattern.compile("(?i)passenger|occup|seat|belt|person|people|weight|cushion|present").matcher(n).find();
-                try {
-                    if (pt.length == 0) {
-                        Object r = m.invoke(dev); String v = r instanceof Boolean ? ((Boolean) r ? "1" : "0") : String.valueOf(r);
-                        if (interesting || isLiveVal(v)) sb.append(n).append("()=").append(v).append(' ');
-                    } else if (pt.length == 1 && pt[0] == int.class && interesting) {
-                        for (int i = 0; i <= 5; i++) { try { Object r = m.invoke(dev, i); String v = r instanceof Boolean ? ((Boolean) r ? "1" : "0") : String.valueOf(r); sb.append(n).append('(').append(i).append(")=").append(v).append(' '); } catch (Throwable ignored) {} }
-                    }
-                } catch (Throwable ignored) {}
-            }
-            String out = sb.toString().trim();
-            if (!out.isEmpty()) { for (int i = 0; i < out.length(); i += 1600) postToD1("ADEV", dom + " | " + out.substring(i, Math.min(out.length(), i + 1600))); shown++; }
-            else postToD1("ADEV", dom + " | (관심 getter 없음)");
-        }
-        return "전 장치 덤프 완료 (" + shown + "개 장치에서 값)";
-    }
-    private static boolean isLiveVal(String v) { return v != null && !v.equals("-10011") && !v.equals("65535") && !v.equals("-2147482648") && !v.equals("-2147482645") && !v.equals("-10011.0"); }
-    // ★835 돌핀 착좌 역산 모니터(운영자 10-07 "ㅇㅇ") — 차가 벨트 미체결 경고를 띄우니 착좌는 안다. getPassengerStatus는 죽었지만
-    //   벨트 체결(getSafetyBeltStatus)은 COMMON으로 자리별로 들어온다(빈↔앉고맴에서 값이 바뀌는 것 확인). 체결+경고를 묶으면 벨트 맨 사람도 역산 가능.
-    //   자리 번호·0/1 의미를 확정하려 BELTMON 명령으로 켠 5분간, 벨트/경고 값을 바뀔 때만 D3BELT로. 한 자리를 상태별로 바꿔 가며 표를 만든다.
-    private volatile long beltMonUntil = 0;
-    private volatile boolean beltMonRunning = false;
-    private final java.util.Map<String, String> beltMonLast = new java.util.HashMap<>();
-    private void startBeltMon() {   // ★836 60초 HB 루프로는 매고 푸는 걸 놓쳐 1.5초 자체 스레드로
-        beltMonUntil = System.currentTimeMillis() + 300_000L; beltMonLast.clear();
-        postToD1("D3BELT", "벨트 모니터 300초 시작(1.5초 실시간) — 한 자리로 빈→앉고안맴→앉고맴→벨트만꽂음→빈 순서로");
-        if (beltMonRunning) return;
-        beltMonRunning = true;
-        new Thread(() -> {
-            try { while (System.currentTimeMillis() < beltMonUntil) { try { beltMonTick(); } catch (Throwable ignored) {} try { Thread.sleep(1500); } catch (InterruptedException e) { break; } } }
-            finally { beltMonRunning = false; postToD1("D3BELT", "벨트 모니터 종료"); }
-        }, "beltmon").start();
-    }
-    private void beltMonTick() {
-        if (System.currentTimeMillis() >= beltMonUntil) return;
-        StringBuilder chg = new StringBuilder();
-        Object inst = deviceByName("instrument"), sb = deviceByName("safetybelt");
-        for (int i = 0; i <= 5; i++) {
-            beltMonPut(chg, "계기벨트" + i, inst, "getSafetyBeltStatus", i);
-            beltMonPut(chg, "벨트벨트" + i, sb, "getSafetyBeltStatus", i);
-            beltMonPut(chg, "승객" + i, sb, "getPassengerStatus", i);
-        }
-        if (chg.length() > 0) postToD1("D3BELT", "시동=" + lastPowerLvl + " | " + chg.toString().trim());
-    }
-    private volatile long modeMonUntil = 0;
-    private volatile boolean modeMonRunning = false;
-    private final java.util.Map<String, String> modeMonLast = new java.util.HashMap<>();
-    private void startModeMon() {   // ★860 에코↔노말은 getOperationMode가 둘 다 1 — 표시등 게터 직접 읽기 + 계기판·에너지 전 게터 차이를 1초마다
-        modeMonUntil = System.currentTimeMillis() + 300_000L; modeMonLast.clear(); energyGetLast.clear(); energyGetTs = 0;
-        StringBuilder ex = new StringBuilder();
-        for (String[] dm : new String[][]{{"instrument", "getECOIndicatorState"}, {"instrument", "getECOIndicatorColor"}, {"instrument", "getSportIndicatorState"}, {"instrument", "getSportIndicatorColor"}}) {
-            Object dev = deviceByName(dm[0]); boolean has = false;
-            if (dev != null) { try { dev.getClass().getMethod(dm[1]); has = true; } catch (Throwable ignored) {} }
-            ex.append(dm[0]).append('.').append(dm[1]).append(has ? " 있음" : " 없음").append(" / ");
-        }
-        postToD1("MODEMON", "주행모드 모니터 300초 시작 — 에코→노말→스포츠 버튼을 천천히 돌려 주세요 | " + ex);
-        if (modeMonRunning) return;
-        modeMonRunning = true;
-        new Thread(() -> {
-            try { while (System.currentTimeMillis() < modeMonUntil) { try { modeMonTick(); } catch (Throwable ignored) {} try { Thread.sleep(1000); } catch (InterruptedException e) { break; } } }
-            finally { modeMonRunning = false; postToD1("MODEMON", "주행모드 모니터 종료"); }
-        }, "modemon").start();
-    }
-    private void modeMonTick() {
-        StringBuilder chg = new StringBuilder();
-        Object ins = deviceByName("instrument"), en = deviceByName("energy");
-        for (String m : new String[]{"getECOIndicatorState", "getECOIndicatorColor", "getSportIndicatorState", "getSportIndicatorColor"}) modeMonPut(chg, "계기." + m, ins, m);
-        for (String m : new String[]{"getOperationMode", "getEnergyMode", "getEnergyState"}) modeMonPut(chg, "에너지." + m, en, m);
-        if (chg.length() > 0) postToD1("MODEMON", "시동=" + lastPowerLvl + " | " + chg.toString().trim());
-        energyGetterDiff();
-    }
-    private void modeMonPut(StringBuilder chg, String label, Object dev, String method) {
-        if (dev == null) return;
-        String v;
-        try { v = String.valueOf(dev.getClass().getMethod(method).invoke(dev)); } catch (NoSuchMethodException e) { v = "메서드없음"; } catch (Throwable t) { v = "예외"; }
-        String prev = modeMonLast.put(label, v);
-        if (prev == null || !prev.equals(v)) chg.append(label).append('=').append(prev == null ? "" : prev + "→").append(v).append(' ');
-    }
-    private void beltMonPut(StringBuilder chg, String label, Object dev, String method, int arg) {
-        if (dev == null) return;
-        try {
-            Object r = dev.getClass().getMethod(method, int.class).invoke(dev, arg);
-            String v = String.valueOf(r);
-            if (v.equals("-10011") || v.equals("-2147482645") || v.equals("65535")) return;   // 미지원 자리는 건너뜀(표 깔끔하게)
-            String prev = beltMonLast.put(label, v);
-            if (prev == null || !prev.equals(v)) chg.append(label).append('=').append(prev == null ? "" : prev + "→").append(v).append(' ');
-        } catch (Throwable ignored) {}
-    }
-    private int cdrFeat(Object dev, String name) {
-        try { return dev == null ? NA : getFeatureInt(dev, featureIdByName(name)); } catch (Throwable t) { return NA; }
-    }
-    private void cdrPut(String key, int v, String src) {
-        if (v == NA || v == -1 || v == Integer.MIN_VALUE || v == -2147482648) return;
-        Integer prev = cdrLast.get(key);
-        if (prev != null && prev == v) return;
-        cdrLast.put(key, v);
-        relay.putStatus(key, v);
-        int n = cdrLogN.getOrDefault(key, 0);
-        if (n < 5) { cdrLogN.put(key, n + 1); postToD1("CDRSIG", key + " " + (prev == null ? "처음" : prev + "→") + v + " ← " + src); }
-    }
     private Class<?> lightCls;
     private Integer lightBoolField(String name) {
         try {
@@ -4294,7 +4004,6 @@ public class SnifferService extends Service {
     private Boolean d3DashFramePresent() {
         Object cam = null; Class<?> ncCls;
         final boolean[] got = new boolean[1];
-        final int[] luma = {-1};   // ★832 대시캠을 빼도 채널이 검은 프레임을 줄 수 있어(운영자 10-07 "대시캠 제거했는데도 나옴") 밝기도 본다
         try {
             if (bmmLoader == null) {
                 java.io.File jar = new java.io.File("/system/framework/bmmcamera.jar");
@@ -4307,10 +4016,7 @@ public class SnifferService extends Service {
             cam = ncCls.getMethod("open", int.class).invoke(null, 0);
             if (cam == null) return false;
             Object proxy = java.lang.reflect.Proxy.newProxyInstance(bmmLoader, new Class[]{ipcCls}, (pr, meth, args) -> {
-                if ("onPreview".equals(meth.getName()) && args != null && args.length >= 6) {
-                    if (luma[0] < 0 && args[0] instanceof byte[]) { byte[] d = (byte[]) args[0]; long sum = 0; int n = 0; for (int i = 0; i < d.length; i += 997) { sum += d[i] & 0xFF; n++; } luma[0] = n > 0 ? (int) (sum / n) : -1; }
-                    got[0] = true;
-                }
+                if ("onPreview".equals(meth.getName()) && args != null && args.length >= 6) got[0] = true;
                 Class<?> rt = meth.getReturnType();
                 return rt == boolean.class ? Boolean.FALSE : (rt == int.class ? Integer.valueOf(0) : null);
             });
@@ -4318,8 +4024,7 @@ public class SnifferService extends Service {
             ncCls.getMethod("enablePreviewCallback").invoke(cam);
             ncCls.getMethod("startPreview").invoke(cam);
             for (int w = 0; w < 40 && !got[0]; w++) Thread.sleep(100);   // 최대 4초(camShot과 동일)
-            if (got[0]) postToD1("CAMAVAIL", "D3 대시캠 프레임 밝기 " + luma[0] + (luma[0] >= 0 && luma[0] < 8 ? " → 검정(없음으로 봄)" : ""));
-            return got[0] && !(luma[0] >= 0 && luma[0] < 8);
+            return got[0];
         } catch (Throwable t) {
             postToD1("CAMAVAIL", "D3 대시캠 확인 예외: " + t.getClass().getSimpleName());
             return null;
@@ -4809,23 +4514,6 @@ public class SnifferService extends Service {
         }
     }
 
-    private long sentryTestLogMs;
-
-    // ★운영자판 센트리 시험 스위치(10-08 운영자 "시동 끈 셈 치고 테스트") — 설정 test_ign_off_until(epoch 초)이 앞으로 30분 안이고 주차(P)·정차일 때만 시동 ON을 OFF로 본다.
-    //   기어가 P를 벗어나거나 움직이면 즉시 풀리고(센트리 게이트가 시동 켜짐으로 돌아가 세션 중지), 시각이 지나면 저절로 꺼진다. 공유판은 항상 false.
-    private boolean sentryTestIgnOff() {
-        if (!BuildConfig.IS_OPERATOR || prefs == null) return false;
-        long until = prefs.getInt("sentry_test_ign_off_until", 0);
-        long now = System.currentTimeMillis() / 1000;
-        if (until <= now || until - now > 1800) return false;
-        if (lastGearVal != 3 || lastDriving == 1 || lastSpeed > 0.5) return false;
-        if (System.currentTimeMillis() - sentryTestLogMs > 60000L) {
-            sentryTestLogMs = System.currentTimeMillis();
-            postToD1("SENTRY", "시험 스위치 — 시동 ON이지만 주차(P)·정차라 시동 OFF로 봄(남은 " + (until - now) + "초, 기어·움직임이 바뀌면 즉시 해제)");
-        }
-        return true;
-    }
-
     private SentryHost sentryHost() {
         return new SentryHost() {
             @Override public android.content.Context context() { return SnifferService.this; }
@@ -4833,16 +4521,14 @@ public class SnifferService extends Service {
             @Override public void log(String m) { postToD1("SENTRY", m); }
             @Override public void putStatus(String key, Object val) { RelayClient rc = relay; if (rc != null) rc.putStatus(key, val); }
             @Override public void postCarEvent(String event) { RelayClient rc = relay; if (rc != null) rc.postCarEvent(event); }
-            @Override public int ignitionState() { RelayClient rc = relay; int ig = rc != null ? rc.ignitionState() : -1; return (ig == 1 && sentryTestIgnOff()) ? 0 : ig; }
+            @Override public int ignitionState() { RelayClient rc = relay; return rc != null ? rc.ignitionState() : -1; }
             @Override public boolean rtcActive() { return (rtcActive && !rtcTapsSentry) || camStreaming || h264Streaming; }   // ★실시간 보기가 센트리 프레임을 받아 쓰는 중이면 게이트가 막지 않는다
             @Override public boolean detectActive() { return detectActive && !detectSentryMode && !canTapDetect(); }   // ★주차 AVM 감지는 센트리가 프레임을 나눠 쓰므로 막지 않는다
             @Override public boolean phoneNearFresh() { return SnifferService.this.phoneNearFresh(); }
-            @Override public boolean conservativeRetry() { return DiLink5Support.isDiLink5(); }
             @Override public boolean lowVoltage() { return lowVoltFlag == 1 && lowSinceMs > 0 && System.currentTimeMillis() - lowSinceMs > lowSustainMs; }
             @Override public int batteryPct() { return lastTripSoc; }
             @Override public float[] objectScores(byte[] nv21, int w, int h) { return sentryObjectScores(nv21, w, h); }
             @Override public float[][] objectDetect(byte[] nv21, int w, int h, int rx, int ry, int rw, int rh, float minScore) { return sentryObjectDetect(nv21, w, h, rx, ry, rw, rh, minScore); }
-            @Override public boolean replayAllowed() { return BuildConfig.IS_OPERATOR && lastGearVal == 3 && lastDriving != 1 && !(lastSpeed > 0.5) && !lowVoltage(); }   // 12V가 낮아지면 재생 시험은 중간에도 멈춘다(차 배터리 보호)
             @Override public long objectLastMs() { com.cseini.motiondetect.YoloDetector y = sentryYolo; return y == null ? 0 : y.lastInferMs(); }
             @Override public void objectRelease() { sentryObjectRelease(); }
             @Override public boolean lanAuthRequired() { return !BuildConfig.IS_OPERATOR; }
@@ -6493,7 +6179,6 @@ public class SnifferService extends Service {
         final boolean notify = params != null && params.optBoolean("notify", false);   // ★테스트화면 실제 오픈(2026-09-04) — true면 kdr 사람게이트(personMot) 통과 시 kick:2 발송(화면 보며 오픈). ROI에디터 '실제 오픈' 토글.
         final int durationSec = params != null ? params.optInt("sec", 600) : 600;
         final boolean hd = params != null && params.optBoolean("hd", false);   // ★HD: 풀해상도+높은비트레이트 / 아니면 다운스케일+절약
-        final boolean scvReq = params != null && params.optBoolean("scv", false);   // ★센트리 미리보기(10-08) — 저장된 칸별 어안 보정(cell_views)만 입혀 내보냄(배치·뒤집기는 앱이 직접 입힘, 감지 영역은 원본 그대로)
 
         rtcTapsSentry = keepSentry;
         rtcActive = true; rtcIceConnected = false; RelayClient.cameraActive = true; camRtcT0 = System.currentTimeMillis();
@@ -6501,7 +6186,6 @@ public class SnifferService extends Service {
             Object cam = null; Class<?> ncCls = null;
             org.webrtc.PeerConnectionFactory factory = null;
             org.webrtc.VideoSource vsrc = null; org.webrtc.PeerConnection pc = null;   // ★스레드 로컬 — 세션 교차 dispose 레이스 방지
-            com.cseini.bydsniffer.sentry.SentryDewarp scvDw = null; boolean scvTried = false; byte[] scvBuf = null; String scvKey = null; long scvChk = 0;   // ★센트리 미리보기 보정(scv) — 영상으로만 보냄, 감지는 원본 f
             com.cseini.motiondetect.MotionDetector dmd = null; int dProc = 0;   // ★감지통합 — finally 정리 위해 try 밖 선언
             int[] tbb = null; TrunkCover rtcCover = new TrunkCover();   // ★테스트화면 킥 진단(2026-09-02) — 트렁크 ROI 사람/발목/킥을 kick2 state로 발행
             final byte[][] latest = new byte[1][]; final int[] meta = new int[4];
@@ -6767,35 +6451,9 @@ public class SnifferService extends Service {
                     if (f != null && f != lastFed && meta[0] > 0) {
                         int w = meta[0], h = meta[1];
                         if (lastFed == null) postToD1("CAMRTC", "★첫 프레임 크기 " + w + "x" + h + " (4분할=2560x1920 / 전방단일이면 다른 크기) view=" + view + " avm=" + avm);   // ★진단: camRtc onPreview 실제 프레임 크기 = 4분할인지 판별
-                        byte[] vsrcBytes = f;
-                        int capW = hd ? 1920 : 960;   // ★HD=1920 고해상도(프레임 희생), SD=960 저해상(고프레임 유지)
-                        if (scvReq) {
-                            if (!scvTried || nowMs - scvChk >= 1000) {   // 1초마다 저장값을 다시 읽는다 — 켜 둔 영상에도 저장 직후 반영(앱이 재촬영 신호를 안 보내도 됨)
-                                scvChk = nowMs;
-                                org.json.JSONObject scvCv = com.cseini.bydsniffer.sentry.SentryManager.get().cellViewsForPreview();
-                                String key = scvCv == null ? "" : scvCv.toString();
-                                if (!scvTried || !key.equals(scvKey)) {
-                                    boolean first = !scvTried;
-                                    scvTried = true; scvKey = key;
-                                    long t0 = android.os.SystemClock.elapsedRealtime();
-                                    if (scvDw != null) { scvDw.close(); scvDw = null; }
-                                    if (scvCv == null || scvCv.length() == 0) postToD1("CAMRTC", first ? "센트리 미리보기 — 저장된 칸별 어안 보정 없음, 원본 그대로" : "센트리 미리보기 — 보정이 지워져 원본으로 돌아감");
-                                    else {
-                                        scvDw = com.cseini.bydsniffer.sentry.SentryDewarp.create(w, h, null, scvCv);
-                                        postToD1("CAMRTC", scvDw != null ? "센트리 미리보기 보정 " + (first ? "켬" : "다시 만듦(저장값 바뀜)") + " — 칸 " + scvCv.names() + " 표 생성 " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms"
-                                                : "센트리 미리보기 보정 못 만듦(" + w + "x" + h + ") — 원본 그대로");
-                                    }
-                                }
-                            }
-                            if (scvDw != null) {
-                                // 1920 넘는 프레임은 아래 cropAndScale이 복사하므로 버퍼를 재사용, 그 이하는 인코더가 나중에 읽을 수 있어 매번 새로 만든다
-                                byte[] o = (w > capW && scvBuf != null && scvBuf.length == f.length) ? scvBuf : new byte[f.length];
-                                if (scvDw.toNv21(f, o, w, h)) { vsrcBytes = o; if (w > capW) scvBuf = o; }
-                                else { postToD1("CAMRTC", "센트리 미리보기 보정 실패 — 원본으로 돌아감"); scvDw.close(); scvDw = null; }
-                            }
-                        }
-                        org.webrtc.NV21Buffer nv = new org.webrtc.NV21Buffer(vsrcBytes, w, h, null);
+                        org.webrtc.NV21Buffer nv = new org.webrtc.NV21Buffer(f, w, h, null);
                         org.webrtc.VideoFrame.Buffer buf = nv;
+                        int capW = hd ? 1920 : 960;   // ★HD=1920 고해상도(프레임 희생), SD=960 저해상(고프레임 유지)
                         if (w > capW) {
                             int sw = capW, sh = (h * capW / w) & ~1;
                             buf = nv.cropAndScale(0, 0, w, h, sw, sh);
@@ -6844,7 +6502,6 @@ public class SnifferService extends Service {
                 postToD1("CAMRTC", "실패:" + rootMsg(t));
             } finally {
                 rtcActive = false; rtcTapsSentry = false; RelayClient.cameraActive = false;
-                try { if (scvDw != null) scvDw.close(); } catch (Throwable ig) {}
                 try { if (dmd != null) { dmd.close(); clearMotState(); } } catch (Throwable ig) {}   // ★감지통합 정리 + mot state 클리어(stream 종료 후 mot=1 잔존 방지)
                 try { if (cam != null && ncCls != null) { ncCls.getMethod("stopPreview").invoke(cam); ncCls.getMethod("close").invoke(cam); } } catch (Throwable ig) {}
                 try { if (fastcamBk[0] != null) fastcamBk[0].stop(); } catch (Throwable ig) {}   // ★fast_cam TCP 브리지 정지(fast_cam_capture+브리지 프로세스)
@@ -7984,7 +7641,7 @@ public class SnifferService extends Service {
                         publishLive("bcm_state", deviceByName("energy"), new String[]{"getBCMState"});
                         publishLive("ac_start_st", acd, new String[]{"getAcStartState"});   // ★공조 전원 실상태(ACSNAP 확정: 켜짐1/꺼짐0)
                         publishLive("drive_mode_get", deviceByName("energy"), new String[]{"getOperationMode"});
-                        if (sunroofCfg == 1 && relay != null) {   // ★856 아토3 선루프 위치 %를 그대로(리모컨 상태)
+                        if (sunroofCfg == 1 && relay != null) {   // ★835 아토3 선루프 위치 %를 그대로(리모컨 상태)
                             int sp = callGetInt0(bwd, "getSunroofPosition");
                             if (sp >= 0) relay.putStatus("sunroof_pos_v", sp);   // 운영자 10-09 "환기 표시는 필요 없어, 그냥 %로"
                         }
@@ -7996,8 +7653,6 @@ public class SnifferService extends Service {
                     //   raw(인메모리·LAN 전용) 대신 putState라 서버에도 남아 원격·사후 확인이 된다.
                     //   ★미검증: 이 static 필드가 실제 점등에 따라 갱신되는지. 실차에서 하향등 ON 시 값이 1로 바뀌는지 확인 필요(안 바뀌면 getter 탐색으로 전환).
                     try { publishLightBeams(); } catch (Throwable ignored) {}
-                    try { publishCdrSignals(); } catch (Throwable ignored) {}   // ★821 순정 블랙박스 항목(브레이크·가속·차폭등·뒤 안개등·운전석 벨트)
-                    d3SeatTick();   // ★824 돌핀 좌석 착석 getter 탐색(읽기 전용, D3SEAT)
                     // ★비상깜빡이(비상등) 상태 — getTurnLightFlashState(OFF=1·좌2·우4·양쪽6=비상등, 위상무관, 다른세션 실측). 폰 이탈 자동화가 6이면 시동끔/잠금 스킵+알림.
                     try {
                         // ★v405 버그수정 — deviceByName("light") 짧은 별칭은 스위치에 case 없어 항상 null → hazard 비트가 한 번도 안 채워져 하차 hazard 스킵이 死였음(2026-09-09 운영자 "비상등 점등중 하차트리거 안되는건 안해?"). 풀 클래스명으로.
@@ -8640,28 +8295,12 @@ public class SnifferService extends Service {
         if (p == null || prefs == null) return "형식 오류";
         if (p.has("adjust")) {   // ★745 씨라7도 허용(보조 켬일 때 헤드유닛 창)
             int sd = p.optInt("adjust");
-            int arr = sd == 8 && clusterCam.revSplit() ? clusterCam.revArr() : 0;
-            if (sd == 8 && clusterCam.revSplit() && arr == 0) {   // ★748 후진 D = 왼쪽·오른쪽 따로 창 둘 다 조정
+            if (sd == 8 && clusterCam.revSplit()) {   // ★748 후진 D = 왼쪽·오른쪽 따로 창 둘 다 조정
                 if (huOverlay != null) huOverlay.adjust(82);
                 if (huOverlay2 != null) huOverlay2.adjust(84);
-            } else {
-                if (huOverlay != null) huOverlay.adjust(sd == 8 && arr != 0 ? (arr == 1 ? 85 : 86) : sd);   // ★815 붙인 한 창이면 그 창 하나
-                if (arr != 0 && huOverlay2 != null) huOverlay2.endAdjust();
-            }
-            postToD1("HUASSIST", "위치·크기 조정 창 " + sd + (sd == 8 && clusterCam.revSplit() ? (arr == 0 ? "(D 왼쪽·오른쪽 따로)" : arr == 1 ? "(D 가로로 붙임)" : "(D 세로로 붙임)") : ""));
+            } else if (huOverlay != null) huOverlay.adjust(sd);
+            postToD1("HUASSIST", "위치·크기 조정 창 " + sd + (sd == 8 && clusterCam.revSplit() ? "(D 왼쪽·오른쪽 따로)" : ""));
             return null;   // ★731 null=성공(명령 규약) — 문자열을 돌려주면 BLE·워커 경로에선 실패로 보였다
-        }
-        // ★815 후진 D 헤드유닛 배치(0 따로 창 · 1 가로 · 2 세로) — 폰 990~이 함께 보낸다. 없으면(구버전 폰) 저장값 그대로. 이것만 온 명령이면 다른 설정은 그대로.
-        if (p.has("rev_arr")) {
-            int arr = Math.max(0, Math.min(2, p.optInt("rev_arr", 0)));
-            if (arr != prefs.getInt("hu_rev_arr", 0)) {
-                prefs.edit().putInt("hu_rev_arr", arr).apply();
-                postToD1("HUASSIST", "후진 창 배치 " + (arr == 0 ? "왼쪽·오른쪽 따로 창" : arr == 1 ? "가로로 붙인 한 창" : "세로로 붙인 한 창") + " — 다음 후진부터 적용");
-            }
-            if (!p.has("place") && !p.has("turn") && !p.has("rev") && !p.has("hide_ms")) {
-                publishHuAssist();
-                return null;
-            }
         }
         // ★739 신호가 끝나고 영상이 사라지기까지(0~3초, 0.1초 단위, 기본 1초) — 폰 964~가 함께 보낸다. 이것만 온 명령이면 다른 설정은 그대로.
         if (p.has("hide_ms")) {
@@ -8698,7 +8337,6 @@ public class SnifferService extends Service {
         relay.putStatus("hu_assist", (prefs.getBoolean("hu_assist_turn", false) ? "turn" : "") + "," + (prefs.getBoolean("hu_assist_rev", false) ? "rev" : ""));
         relay.putStatus("assist_cfg", "t" + (prefs.getBoolean("assist_on_turn", false) ? 1 : 0) + "r" + (prefs.getBoolean("assist_on_rev", false) ? 1 : 0) + "@" + prefs.getString("assist_place", "phone"));   // ★729 폰이 자기 설정과 비교해 다르면 다시 보낸다
         relay.putStatus("assist_hide", prefs.getInt("hu_hide_ms", 1000));   // ★739 따로 둔다(assist_cfg 모양을 바꾸면 963 이하 폰이 1분마다 다시 보냄)
-        relay.putStatus("assist_rev_arr", prefs.getInt("hu_rev_arr", 0));   // ★815 후진 D 헤드유닛 배치 — 따로 둔다(같은 이유). 이 값이 있으면 폰은 '이 릴레이가 배치 선택을 지원'으로 본다
     }
     // ★739 재부팅 루틴 방지(운영자 10-04 "일렉트로처럼") — BYD 클라이언트 설정 서비스(CloudReboot)는 시동 꺼짐·잠금 상태에서 헤드유닛이 24시간
     //   (72시간·7일 기준도 있음) 넘게 켜져 있으면 reboot("bydcloud")로 재부팅한다(운영자 차 10-02 15:46·10-03 15:39·10-04 18:44, 그때마다 릴레이도 끊김).
@@ -9131,7 +8769,7 @@ public class SnifferService extends Service {
         if (liveLogged.add(key + ":fail")) postToD1("CAPS", "실시간 상태 " + key + " — 후보 getter 전부 실패(" + candidates.length + "개)");
     }
 
-    private volatile int sunroofCfg = -1;   // ★856 getMoonRoofConfig(1=유리 선루프 있음·아토3) — 리모컨 목록 만들 때 채움
+    private volatile int sunroofCfg = -1;   // ★835 getMoonRoofConfig(1=유리 선루프 있음·아토3) — 리모컨 목록 만들 때 채움
     private int callGetInt0(Object dev, String method) {
         try { Object r = dev.getClass().getMethod(method).invoke(dev);
             if (r instanceof Number) return ((Number) r).intValue(); } catch (Throwable ignored) {}
@@ -9399,12 +9037,7 @@ public class SnifferService extends Service {
             java.util.List<String> urls = new java.util.ArrayList<>();
             for (String ip : ips) urls.add("http://" + ip + ":" + remoteWeb.getListeningPort() + "/");
             if (relay != null) relay.putStatus("remote_web", urls);
-            // ★848 헤드유닛 자체 핫스팟 주소 따로 — 앱 '웹 연결'이 폰과 같은 망이 아닐 때 다른 기기용으로 보여 준다(운영자 10-08)
-            java.util.List<String> apUrls = new java.util.ArrayList<>();
-            for (String ip : RemoteWebServer.apIps(this)) apUrls.add("http://" + ip + ":" + remoteWeb.getListeningPort() + "/");
-            if (relay != null) relay.putStatus("remote_web_ap", apUrls);
-            java.util.List<String> sig = new java.util.ArrayList<>(urls); sig.add("ap"); sig.addAll(apUrls);
-            if (!sig.equals(remoteWebLast)) { remoteWebLast = sig; postToD1("WEB", "리모컨 웹 접속 URL " + (ips.isEmpty() ? "(네트워크 없음 — 핫스팟/WiFi 켜면 표시)" : urls.toString()) + " · 차 핫스팟 " + (apUrls.isEmpty() ? "없음" : apUrls.toString()) + " · 인터페이스 " + RemoteWebServer.ifaceSummary(this)); }
+            if (!urls.equals(remoteWebLast)) { remoteWebLast = urls; postToD1("WEB", "리모컨 웹 접속 URL " + (ips.isEmpty() ? "(네트워크 없음 — 핫스팟/WiFi 켜면 표시)" : urls.toString())); }
         } catch (Throwable ignored) {}
     }
     private void stopRemoteWeb() { try { if (remoteWeb != null) remoteWeb.stop(); } catch (Throwable ignored) {} remoteWeb = null; }
@@ -9884,19 +9517,11 @@ public class SnifferService extends Service {
         private boolean huShow(int sd) { return huOverlay != null && !allStopOn() && huOverlay.wants(sd); }
         /** ★748 후진 화면 D(좌·우만)면 헤드유닛엔 왼쪽·오른쪽 따로 창(폰은 나란히 한 장). 씨라7은 A·B·C·D를 안 씀. */
         boolean revSplit() { return !IS_D5 && "D".equals(revLayout()); }
-        /** ★815 후진 D 헤드유닛 배치 — 0=왼쪽·오른쪽 따로 창(기본) · 1=가로로 붙인 한 창 · 2=세로로 붙인 한 창(왼쪽이 위). 폰이 HUASSIST rev_arr로 정한다. */
-        int revArr() { return prefs == null ? 0 : Math.max(0, Math.min(2, prefs.getInt("hu_rev_arr", 0))); }
         private void huDisplay(int sd) {
             if (huOverlay == null) return;
             boolean ok = !allStopOn();
-            if (sd == 8 && revSplit()) {
-                int arr = revArr();
-                if (arr != 0) {   // ★815 붙인 한 창(85=가로·86=세로)은 huOverlay가 맡고 오른쪽 따로 창은 닫는다
-                    huOverlay.onDisplay(arr == 1 ? 85 : 86, ok);
-                    if (huOverlay2 != null) huOverlay2.onDisplay(0, ok);
-                    return;
-                }
-                huOverlay.onDisplay(82, ok);   // ★748 왼쪽은 huOverlay(82), 오른쪽은 huOverlay2(84)
+            if (sd == 8 && revSplit()) {   // ★748 왼쪽은 huOverlay(82), 오른쪽은 huOverlay2(84)
+                huOverlay.onDisplay(82, ok);
                 if (huOverlay2 != null) huOverlay2.onDisplay(84, ok);
                 return;
             }
@@ -9921,7 +9546,7 @@ public class SnifferService extends Service {
             long now = System.currentTimeMillis();
             boolean want = keepWanted();
             if (huOverlay != null) huOverlay.standby(want && (huShow(2) || huShow(8)));   // ★739 헤드유닛 표시면 창도 미리 만들어 숨겨 둠
-            if (huOverlay2 != null) huOverlay2.standby(want && huShow(8) && revSplit() && revArr() == 0);   // ★748 후진 D 오른쪽 따로 창도(★815 붙인 한 창이면 안 만듦)
+            if (huOverlay2 != null) huOverlay2.standby(want && huShow(8) && revSplit());   // ★748 후진 D 오른쪽 따로 창도
             if (want) {
                 if (active || now < keepRetryAt) return;
                 if (takingRtc || rtcActive || camStreaming || h264Streaming || camProbing || (detectActive && (detectAvm || !camDualOk()))) return;
@@ -10030,27 +9655,8 @@ public class SnifferService extends Service {
                     int dw = bw & ~1, dh = bh & ~1;
                     if (dw < 32 || dh < 32) return null;
                     com.cseini.motiondetect.ViewWarp w = revSideWarp(sd, tt, qw, qh, dw, dh);   // ★751 차주 조정값(없으면 기본)
-                    return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, new int[]{0}, dw, dh, bw, bh);
+                    return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, dw, dh, bw, bh);
                 } catch (Throwable t) {
-                    if (!key.equals(huFailKey)) { huFailKey = key; postToD1("HUASSIST", "창 보정표 실패 side=" + sd + " " + rootMsg(t)); }
-                    return null;
-                }
-            }
-            if (sd == 85 || sd == 86) {   // ★815 후진 D 왼쪽·오른쪽을 한 창에 붙임 — 85=가로(왼쪽|오른쪽) · 86=세로(위 왼쪽·아래 오른쪽). 칸마다 82·84와 같은 화면을 창 비율에 맞춰 가득(칸 사이 6px 검정)
-                String key = sd + "|" + fw + "x" + fh + "|" + bw + "x" + bh + "|" + ccamGen;
-                if (prev != null && prev.key.equals(key)) return prev;
-                com.cseini.motiondetect.ViewWarp w1 = null;
-                try {
-                    final int SEP = 6; boolean hor = sd == 85;
-                    int dw = (hor ? (bw - SEP) / 2 : bw) & ~1, dh = (hor ? bh : (bh - SEP) / 2) & ~1;
-                    if (dw < 32 || dh < 32) return null;
-                    int[] tl = tileRect(fw, fh, 2), tr = tileRect(fw, fh, 4);
-                    w1 = revSideWarp(82, tl, tl[2], tl[3], dw, dh);
-                    com.cseini.motiondetect.ViewWarp w2 = revSideWarp(84, tr, tr[2], tr[3], dw, dh);
-                    return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w1, w2}, new int[]{0, hor ? dw + SEP : 0}, new int[]{0, hor ? 0 : dh + SEP},
-                            hor ? 2 * dw + SEP : dw, hor ? dh : 2 * dh + SEP, bw, bh);
-                } catch (Throwable t) {
-                    if (w1 != null) w1.close();   // 둘째 칸이 실패하면 만든 첫 칸 보정표를 놓아준다
                     if (!key.equals(huFailKey)) { huFailKey = key; postToD1("HUASSIST", "창 보정표 실패 side=" + sd + " " + rootMsg(t)); }
                     return null;
                 }
@@ -10065,7 +9671,7 @@ public class SnifferService extends Service {
                     if (W < 64 || H < 32) return null;
                     int[] xs = new int[3];
                     com.cseini.motiondetect.ViewWarp[] ws = revWarps(lay, fw, fh, W, H, xs);
-                    return new HuAssistOverlay.Layout(key, ws, java.util.Arrays.copyOf(xs, ws.length), new int[ws.length], W, H, bw, bh);
+                    return new HuAssistOverlay.Layout(key, ws, java.util.Arrays.copyOf(xs, ws.length), W, H, bw, bh);
                 }
                 int[] tr = tileRect(fw, fh, sd); int qw = tr[2], qh = tr[3];
                 org.json.JSONObject c = cfg.isEmpty() ? null : new org.json.JSONObject(cfg);
@@ -10074,7 +9680,7 @@ public class SnifferService extends Service {
                 if (dw < 32 || dh < 32) return null;
                 com.cseini.motiondetect.ViewWarp w = c != null ? customWarp(c, tr, qw, qh, dw, dh)
                         : new com.cseini.motiondetect.ViewWarp(tr[0], tr[1], qw, qh, 0, 0, qw, qh, false, 160f, 0f, false, dw, dh, false, 0f, 0f, 0f, 0f);
-                return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, new int[]{0}, dw, dh, bw, bh);
+                return new HuAssistOverlay.Layout(key, new com.cseini.motiondetect.ViewWarp[]{w}, new int[]{0}, dw, dh, bw, bh);
             } catch (Throwable t) {
                 if (!key.equals(huFailKey)) { huFailKey = key; postToD1("HUASSIST", "창 보정표 실패 side=" + sd + " " + rootMsg(t)); }
                 return null;
@@ -10537,8 +10143,7 @@ public class SnifferService extends Service {
     private String webRunCommand(String action, org.json.JSONObject params) {
         try {
             if ("RAW".equals(action)) return execRelayAction("RAW", params);
-            if (action.startsWith("LAUNCHAPP ") || action.startsWith("SPLIT ") || action.startsWith("SPLITRATIO ") || action.equals("APPLIST")
-                    || action.startsWith("LAUNCHFF ") || action.startsWith("WINRESIZE ") || action.startsWith("WINFRONT ")) return appLauncherCmd(action);   // ★861 자유 창 3종(링크락 런처가 127.0.0.1 /cmd로 부름)
+            if (action.startsWith("LAUNCHAPP ") || action.startsWith("SPLIT ") || action.startsWith("SPLITRATIO ") || action.equals("APPLIST")) return appLauncherCmd(action);
             if (action.equals("TRUNK") || action.startsWith("TRUNK ")) return trunkCmd(action, params);
             // ★862 트랙패드 실험 — 고빈도(드래그 초당 수십콜)라 워커 경유가 없다(웹/LAN 전용). uinput 지속연결은 MouseInjector가 관리.
             if ("CLUSTERCFG".equals(action)) return clusterLayoutCfg(params);   // ★619 클러스터 레이아웃(위젯·테마·칩) 릴레이 저장 — 클러스터 페이지 LAN 저장
@@ -10561,9 +10166,6 @@ public class SnifferService extends Service {
                     int pct = tok.length >= 4 ? Integer.parseInt(tok[3]) : 50;
                     res = SplitLauncher.split(this, tok[1], tok[2], pct, log);
                 } else if (tok[0].equals("SPLITRATIO") && tok.length >= 2) res = SplitLauncher.applyRatio(this, Integer.parseInt(tok[1]), log);
-                else if (tok[0].equals("LAUNCHFF") && tok.length >= 6) res = SplitLauncher.launchFreeform(this, tok[1], Integer.parseInt(tok[2]), Integer.parseInt(tok[3]), Integer.parseInt(tok[4]), Integer.parseInt(tok[5]), log);
-                else if (tok[0].equals("WINRESIZE") && tok.length >= 6) res = SplitLauncher.resizeTask(this, tok[1], Integer.parseInt(tok[2]), Integer.parseInt(tok[3]), Integer.parseInt(tok[4]), Integer.parseInt(tok[5]), log);
-                else if (tok[0].equals("WINFRONT") && tok.length >= 2) res = SplitLauncher.bringFront(this, tok[1], log);
                 else res = "형식 오류: " + action;
             } catch (Throwable t) { res = "예외 " + t.getClass().getSimpleName() + ":" + t.getMessage(); }
             postToD1("SPLIT", action + " → " + res + (log.length() > 0 ? "\n" + log.toString().trim() : ""));
@@ -10608,7 +10210,7 @@ public class SnifferService extends Service {
         int ventV = 5;
         caps.put(mf("win_vent", "window", "전체 환기", "🪟", "act", "bodywork", "setAllWindowState", ja(ventV, ventV, ventV, ventV)).put("winFallback", winM).put("chk", d5));
         caps.put(mf("win_close", "window", "전체 닫기", "🪟", "act", "bodywork", "setAllWindowState", ja(2, 2, 2, 2)).put("winFallback", winM));
-        // ★855 FB2223(도규아빠 A3, 운영자 10-09 "창문은 개별 제어로 다 있어도 될 듯") — 전체 다 열기 + 창문별(운전·동승·뒤 왼쪽·뒤 오른쪽) 단계.
+        // ★834 FB2223(도규아빠 A3, 운영자 10-09 "창문은 개별 제어로 다 있어도 될 듯") — 전체 다 열기 + 창문별(운전·동승·뒤 왼쪽·뒤 오른쪽) 단계.
         //   D3 setBodyWindowCtrlState(area, 2닫기·5조금(환기)·4반·1다 열기) 실차 확정(카탈로그 §3). D5는 카탈로그의 setWindowOpenPercent(area, %) — 미확인이라 확인 배지.
         caps.put(mf("win_open", "window", "전체 다 열기", "🪟", "act", "bodywork", "setAllWindowState", ja(1, 1, 1, 1)).put("winFallback", winM).put("chk", d5));
         String[] winNames = {"운전석", "동승석", "뒤 왼쪽", "뒤 오른쪽"};
@@ -10626,12 +10228,11 @@ public class SnifferService extends Service {
             //   프리셋 3단 순환(닫힘 0 → 반 50 → 전체 100)으로 변경: 탭 1회 = 명령 1회.
             else caps.put(mf("shade", "body", "선쉐이드", "☀", "cycle", "bodywork", "nudgeSunshadeState", ja("$v"))
                     .put("methodZero", "setSunshadeState").put("steps", steps(0,"닫힘",50,"반",100,"전체")).put("state", "sunshade_pct"));
-            // ★854 아토3 유리 선루프 시험 버튼(운영자 10-09 "환기·틸트 같은 것도 있다던데 있는 거 다 리모컨에 넣어서 검증") —
-            //   getMoonRoofConfig 1=선루프 있음(아토3 실측: 152269·193407)·2=없음(돌핀). 값 의미는 미확정이라 확인 배지.
-            //   열림 %(setMoonRoofState)·동작 값 1~4(voiceCtlMoonRoof — 열기·닫기·틸트 후보)·정지. 상태는 getSunroofPosition 원값.
+            // ★833 아토3 유리 선루프 시험 버튼(운영자 10-09 "있는 거 다 리모컨에 넣어서 검증") — getMoonRoofConfig 1=선루프 있음(아토3 실측)·2=없음(돌핀).
+            //   값 의미 미확정이라 확인 배지. 열림 %(setMoonRoofState)·동작 값 1~4(voiceCtlMoonRoof — 열기·닫기·틸트 후보)·정지. 상태는 원값.
             sunroofCfg = d5 ? 0 : callGetInt0(bw, "getMoonRoofConfig");
             if (!d5 && sunroofCfg == 1) {
-                // ★856 비틀런처 1.23(아토3) 확인값(피드백 세션 디컴파일, 운영자 10-09 "썬루프 진행 해") — setMoonRoofState 하나로 0=닫기·1~100=열림%·253=틸트(살짝 들어올림)·254=멈춤.
+                // ★835 비틀런처 1.23(아토3) 확인값(피드백 세션 디컴파일, 운영자 10-09 "썬루프 진행 해") — setMoonRoofState 하나로 0=닫기·1~100=열림%·253=틸트(살짝 들어올림)·254=멈춤.
                 //   252(컴포트)는 뜻 불명이라 안 넣는다. 상태는 getSunroofPosition %를 sunroof_pos_v로 그대로.
                 caps.put(mf("sunroof", "body", "선루프", "🌤", "cycle", "bodywork", "setMoonRoofState", ja("$v"))
                         .put("steps", steps(0,"닫힘",50,"50%",100,"100%")).put("state", "sunroof_pos_v").put("chk", true));
@@ -10639,7 +10240,7 @@ public class SnifferService extends Service {
                         .put("steps", steps(0,"닫힘",253,"틸트")).put("state", "sunroof_tilt_st").put("chk", true));   // ★10-10 FB2253 틸트↔닫힘 번갈아(253 반복은 변화 없음). 상태는 릴레이가 마지막으로 보낸 값
                 if (relay != null && relay.getStatus("sunroof_tilt_st") == null) relay.putStatus("sunroof_tilt_st", 0);   // 운영자 10-09 "틸트는 별개 버튼으로" — 선택 표시 없음
                 // 시험용 '선루프 동작(voiceCtlMoonRoof 값1~4)'은 뺌 — 비틀런처 값(setMoonRoofState)이 확인돼 같은 선루프를 움직이는 버튼이 겹쳤다(운영자 10-09 "배타적인 건 알아서")
-                caps.put(mf("sunroof_stop", "body", "선루프 멈춤", "⏹", "act", "bodywork", "setMoonRoofState", ja(254)).put("chk", true));   // ★856 비틀런처와 같은 254
+                caps.put(mf("sunroof_stop", "body", "선루프 멈춤", "⏹", "act", "bodywork", "setMoonRoofState", ja(254)).put("chk", true));   // ★835 비틀런처와 같은 254
             }
         }
         // ★주행 감각 설정(2026-09-10 운영자 요청) — DUMP_METHODS 실차 확정 세터. 값 시맨틱은 미확정이라 chk 배지.
@@ -10660,7 +10261,7 @@ public class SnifferService extends Service {
                 //   09-12 메모에 "하이라이트가 차 화면과 반대면 라벨만 교체(값은 고정)"로 예견해둔 케이스가 실제로 확인됐다.
                 //   D5는 1=스포츠·2=컴포트다(D3의 setBrakeFootSenseState 2/0과는 별개 체계). 값은 그대로 두고 라벨만 뒤집는다.
                 .put("steps", d5 ? steps(1,"스포츠",2,"컴포트") : steps(2,"컴포트",0,"스포츠"))
-                .put("state", d5 ? "getBrakePedalMode" : "getBrakeFootSenseState").put("chk", d5));   // ★854 돌핀은 확인 배지 뺌(운영자 10-09 — 실차로 확인됨)
+                .put("state", d5 ? "getBrakePedalMode" : "getBrakeFootSenseState").put("chk", d5));   // ★833 돌핀은 확인 배지 뺌(운영자 10-09)
         // ★E-페달 타일 제거(2026-09-11 운영자 "이페달은 뭘 하는 건지 모르겠고 차량에 그런 이름의 기능은 없다") —
         //   SDK엔 setEPedalMode·SET_E_PEDAL_MODE_STATE_SET·getEPedalMode가 다 있고 baseSet도 OK(0)를 돌려주지만
         //   **돌핀 액티브엔 해당 기능 자체가 없다**. 세터·feature·게터가 다 있어도 차종에 기능이 없으면 없는 것.
@@ -12213,17 +11814,15 @@ public class SnifferService extends Service {
                 return null;
             }
             // ★753 시동 꺼도 USB 유지(부가기능 토글) — RAW {"usbKeep":true|false}, 실차 시험용 {"usbKeepMode":0|1|2|3}(0 화면 깨우기 잠금·1 keyevent 224·2 둘 다·★758 3 셸 깨우기=기본)
-            if ((params.has("usbKeep") || params.has("usbKeepMode") || params.has("usbKeepDark") || params.has("wifiKeep")) && prefs != null) {
+            if ((params.has("usbKeep") || params.has("usbKeepMode") || params.has("usbKeepDark")) && prefs != null) {
                 android.content.SharedPreferences.Editor e = prefs.edit();
                 if (params.has("usbKeep")) e.putBoolean("usb_keep_user", params.optBoolean("usbKeep"));
-                if (params.has("wifiKeep")) e.putBoolean("wifi_keep_user", params.optBoolean("wifiKeep"));   // ★820 시동 꺼도 와이파이 유지(USB 유지 동작 중에만)
                 if (params.has("usbKeepMode")) e.putInt("usb_keep_how", Math.max(0, Math.min(3, params.optInt("usbKeepMode", 3))));   // ★758 3=셸 깨우기
                 if (params.has("usbKeepDark")) e.putBoolean("usb_keep_dark", params.optBoolean("usbKeepDark"));   // ★760 USB 유지 중 화면 끄기(기본 켬)
                 e.apply();
                 usbKeepStLast = "";   // 다음 틱(2초)에 상태 다시 알림
                 if (relay != null) relay.putStatus("usb_keep_user", prefs.getBoolean("usb_keep_user", false) ? 1 : 0);
-                if (relay != null) relay.putStatus("wifi_keep_user", prefs.getBoolean("wifi_keep_user", false) ? 1 : 0);
-                postToD1("USBKEEP", "설정 — 수동 " + (prefs.getBoolean("usb_keep_user", false) ? "켬" : "끔") + " · 방식 " + prefs.getInt("usb_keep_how", 3) + " · 화면 끄기 " + (prefs.getBoolean("usb_keep_dark", true) ? "켬" : "끔") + " · 와이파이 유지 " + (prefs.getBoolean("wifi_keep_user", false) ? "켬" : "끔"));
+                postToD1("USBKEEP", "설정 — 수동 " + (prefs.getBoolean("usb_keep_user", false) ? "켬" : "끔") + " · 방식 " + prefs.getInt("usb_keep_how", 3) + " · 화면 끄기 " + (prefs.getBoolean("usb_keep_dark", true) ? "켬" : "끔"));
                 return null;
             }
             // ★736 돌핀 센트리 깨우기 시험 스위치(운영자판, 기본 켬) — RAW {"d3Sentry":false}로 끔.
@@ -12538,7 +12137,7 @@ public class SnifferService extends Service {
                     return null;
                 }
                 lastSunshadeNudgePct = pct; lastSunshadeNudgeTs = now;
-                // ★854 비틀런처처럼 목표 %로 바로 보낸다(운영자 10-09 "항상 닫았다 열어서 오동작") — 4초 안에 위치가 움직이면 끝.
+                // ★833 비틀런처처럼 목표 %로 바로 보낸다(운영자 10-09 "항상 닫았다 열어서 오동작") — 4초 안에 위치가 움직이면 끝.
                 //   차가 씹었을 때(08-26 실측: OK인데 미이동)만 아래 닫기→열기 우회로 넘어간다. 닫기(0)는 움직이지 않아도 우회하지 않는다.
                 String rd = callIntMethod(dev, "setSunshadeState", pct);
                 int startPct = curPct, nowPct = curPct;
@@ -12550,7 +12149,7 @@ public class SnifferService extends Service {
                 boolean moved = nowPct >= 0 && (Math.abs(nowPct - pct) <= 5 || (startPct >= 0 && Math.abs(nowPct - startPct) >= 3));
                 postToD1("DILINK_RAW", devName + ".setSunshadeState[" + pct + "] (바로 이동) → " + rd + " · 위치 " + startPct + "→" + nowPct + (moved ? " 움직임" : " 안 움직임"));
                 if (moved || pct <= 0) return rd.startsWith("OK") ? null : rd;
-                // ★v319-hotfix(854부터 바로 이동이 안 먹을 때만): '열기(pct>0)'는 close(0)→open 우회로 확실히 이동시킨다.
+                // ★v319-hotfix: 위치 미상이라도 '열기(pct>0)'는 close(0)→open 우회로 확실히 이동시킨다.
                 //   직접 setSunshadeState는 차가 씹어(가짜OK) 안 열리던 것(2026-08-26 실측: 접근/수동 100% 전송해도 setSunshadeState OK인데 미이동).
                 //   재시작 직후 센서 미보고(-1)로 폴백 타면 영영 안 열리던 데드락 해소. 이미 열려있으면 닫았다 열려 미세 flicker 가능하나 안 열리는 것보다 나음.
                 String r0 = callIntMethod(dev, "setSunshadeState", 0);
@@ -13304,7 +12903,7 @@ public class SnifferService extends Service {
         playIccSoundRaw(index, vol);
     }
     void playIccSoundRaw(int index, float vol) { playIccSoundRaw(index, vol, 0); }
-    // ★854 side: 0=양쪽, 2=왼쪽, 4=오른쪽(깜빡이 값과 같은 번호) — 반대쪽은 0.3으로 남긴다(운전석에서 조수석 쪽이 너무 작아지지 않게)
+    // ★833 side: 0=양쪽, 2=왼쪽, 4=오른쪽(깜빡이 값과 같은 번호) — 반대쪽은 0.3으로 남긴다(운전석에서 조수석 쪽이 너무 작아지지 않게)
     void playIccSoundRaw(int index, float vol, int side) {
         if (iccSoundPool == null || index < 0 || index >= iccSoundIds.length || iccSoundIds[index] == 0) {
             postToD1("ICC", "재생 스킵 — pool=" + (iccSoundPool != null) + " idx=" + index + " id=" + (index >= 0 && index < iccSoundIds.length ? iccSoundIds[index] : -1));
@@ -13401,9 +13000,9 @@ public class SnifferService extends Service {
         else if (!wasOn && on && prefs.getBoolean("lane_recover_on", false)) // OFF→ON(복구) → 복구음(옵션)
             fireLaneSound(prefs.getInt("lane_recover_idx", 0), "중앙유지 복구");
     }
-    // ★FB2200(10-09 운영자 "ㄱㄱ") 씨라7 차로 알림 — D3의 중앙유지 표시(TJA_ICA) 신호가 D5엔 없어 크루즈 상태 전이로 같은 판단.
-    //   신호 문서(10-06, 씨라7 실측): 3=ICC, 3→2/5=ICC 종료·ACC 유지(차로를 놓쳐 ICC만 풀림), 2/5→3=ICC 복귀, 3→1=둘 다 해제(운전자 의도라 무음).
-    //   accActive도 여기서 세팅(종전엔 D3 ACC_MODE 경로만 세팅해 씨라7은 항상 false였다). 첫 값(-1)은 기준만.
+    // ★833 FB2200 씨라7 차로 알림 — D3의 중앙유지 표시(TJA_ICA) 신호가 D5엔 없어 크루즈 상태 전이로 같은 판단.
+    //   신호 문서(10-06, 씨라7 실측): 3=ICC, 3→2/5=ICC 종료·ACC 유지(차로를 놓쳐 ICC만 풀림), 2/5→3=ICC 복귀, 3→1=둘 다 해제(무음).
+    //   accActive도 여기서 세팅(종전엔 D3 ACC_MODE 경로만 세팅해 씨라7은 항상 false). 첫 값(-1)은 기준만.
     private void d5IccLaneTransition(int prev, int v) {
         accActive = (v == 3);
         if (prev < 0 || prefs == null || !prefs.getBoolean("lane_alert_on", false)) return;
@@ -13451,39 +13050,7 @@ public class SnifferService extends Service {
     }
 
     private final java.util.Map<String, String> energyEvtLast = new java.util.concurrent.ConcurrentHashMap<>();
-    private volatile long allEvtUntil = 0;   // ★833 ALLEVT 전체 이벤트 덤프 종료 시각
-    private final java.util.Map<String, String> allEvtLast = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.Map<String, Long> allEvtTs = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, Long> energyEvtTs = new java.util.concurrent.ConcurrentHashMap<>();
-    // ★854 클러스터 에코/노말(운영자 10-09 "값으로 분명 구분할 수 있어") — getOperationMode는 둘 다 1이라, 에너지 이벤트가 올 때마다
-    //   energy·instrument의 인자 없는 int 게터를 전부 읽어 지난번과 달라진 것만 ENERGYGET로 남긴다(운영자판). 에코↔노말을 바꿔 보면 갈리는 게터가 드러난다.
-    private final java.util.Map<String, Integer> energyGetLast = new java.util.HashMap<>();
-    private long energyGetTs = 0;
-    private synchronized void energyGetterDiff() {
-        long now = System.currentTimeMillis();
-        if (now - energyGetTs < 3000) return;
-        energyGetTs = now;
-        StringBuilder sb = new StringBuilder();
-        for (String dn : new String[]{"energy", "instrument"}) {
-            Object dev = deviceByName(dn);
-            if (dev == null) continue;
-            for (java.lang.reflect.Method m : dev.getClass().getMethods()) {
-                if (m.getParameterTypes().length != 0 || m.getReturnType() != int.class || !m.getName().startsWith("get")) continue;
-                int v;
-                try { v = (Integer) m.invoke(dev); } catch (Throwable t) { continue; }
-                Integer pv = energyGetLast.put(dn + "." + m.getName(), v);
-                if (pv != null && pv != v) sb.append(' ').append(dn).append('.').append(m.getName()).append('=').append(pv).append("→").append(v);
-            }
-        }
-        if (sb.length() > 0) postToD1("ENERGYGET", "opMode=" + (relay != null ? relay.getStatus("drive_mode_get") : "?") + sb);
-    }
-    private final java.util.Map<String, String> seatEvtLast = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.Map<String, Integer> beltRem = new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.Map<String, Integer> seatEvtFlips = new java.util.concurrent.ConcurrentHashMap<>();   // ★832 2초마다 0↔1 흔들리는 이벤트(COMMAND_AREA_DEPUTY) 거르기
-    private final java.util.Set<String> seatEvtNoisy = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    private long seatEvtWin = 0;   // ★831 belt_rem_pass/rl/rc/rr 마지막 값
-    private int d3SeatPwLast = -9;
-    private final java.util.Map<String, Long> seatEvtTs = new java.util.concurrent.ConcurrentHashMap<>();
     private void onVehicleEvent(String deviceName, int featureId, BYDAutoEventValue value) {
         try {
             int intVal = -1;
@@ -13497,39 +13064,15 @@ public class SnifferService extends Service {
             String featureName = idToName.getOrDefault(featureId, "id" + featureId);
             String rawKey = deviceName + ":" + featureName;
             Object rawVal = rawEventValue(value, intVal);
-            // ★833 전체 이벤트 덤프(운영자 10-07 'ㄱㄱ') — ALLEVT 명령으로 켠 3분 동안 모든 도메인 이벤트를 값 바뀔 때만 EVTDUMP로(이름 무관, intValue 우선).
-            //   돌핀 착좌가 어느 이벤트로 오는지 찾기 위함(getProperty는 GET 권한이 막혀 불가, 리스너 이벤트는 COMMON으로 받음).
-            if (System.currentTimeMillis() < allEvtUntil) {
-                String ek = rawKey; String ev = intVal + (rawVal instanceof Integer ? "" : "/" + rawVal);
-                String epv = allEvtLast.put(ek, ev); Long ept = allEvtTs.get(ek);
-                long en = System.currentTimeMillis();
-                if (!ev.equals(epv) && (ept == null || en - ept > 1500)) { allEvtTs.put(ek, en); postToD1("EVTDUMP", ek + "=" + ev + (epv == null ? "" : " (이전 " + epv + ")") + " 시동=" + lastPowerLvl); }
-            }
             clusterRawUpdate(rawKey, rawVal);   // ★클러스터 raw 이벤트 맵(2026-09-17) — 필터·NoiseFilter·로그 이전 단계, 모든 이벤트
             if (clusterPinKey(rawKey) && clusterPinFirstSeen.add(rawKey)) postToD1("CLUSTER", "핀 키 최초 이벤트 수신: " + rawKey + "=" + rawVal);   // ★567 실증용(위 주석)
             // ★607 에코/노말 실험(606 energy 구독) — clusterRaw는 헤드유닛 메모리에만 있어 A1에서 안 보임 → 운영자판만 값 변화 시 ENERGYEVT 로그(키별 5초 스로틀).
-            if (BuildConfig.IS_OPERATOR && "energy".equals(deviceName) && featureName.contains("OPERATION_MODE")) postToD1("MODEEVT", featureName + "=" + rawVal + " intVal=" + intVal + " (중복 제거 없음)");   // ★860
             if (BuildConfig.IS_OPERATOR && "energy".equals(deviceName)) {
                 long nowE = System.currentTimeMillis(); String vs = String.valueOf(rawVal);
                 String pv = energyEvtLast.put(featureName, vs); Long pt = energyEvtTs.get(featureName);
-                if (!vs.equals(pv) && (pt == null || nowE - pt > 5000)) { energyEvtTs.put(featureName, nowE); postToD1("ENERGYEVT", featureName + "=" + vs + " (이전 " + pv + ") opMode=" + (relay != null ? relay.getStatus("drive_mode_get") : "?")); energyGetterDiff(); }
+                if (!vs.equals(pv) && (pt == null || nowE - pt > 5000)) { energyEvtTs.put(featureName, nowE); postToD1("ENERGYEVT", featureName + "=" + vs + " (이전 " + pv + ") opMode=" + (relay != null ? relay.getStatus("drive_mode_get") : "?")); }
             }
 
-            // ★830 돌핀 착좌 관찰(운영자 10-07 "착좌 관찰만 올리자") — 뒷좌석 벨트 경고 팝업은 뜨는데 게터로는 자리별 값이 안 읽혀 이벤트로 찾는다.
-            //   안전벨트 장치 이벤트 전부 + 다른 장치의 좌석·벨트 이름 이벤트를 값이 바뀔 때만 SEATEVT로(운영자판·디링크3, 키별 2초 스로틀).
-            if (BuildConfig.IS_OPERATOR && !IS_D5 && ("safetybelt".equals(deviceName) || D3SEAT_NAME.matcher(featureName).find()) && !D3SEAT_SKIP.matcher(featureName).find()) {
-                long nowS = System.currentTimeMillis(); String vs = intVal + (rawVal instanceof Integer ? "" : "/" + rawVal);   // ★831 doubleValue 센티넬(-1e9)만 찍혀 값이 안 보이던 것 → intValue 먼저
-                String pv = seatEvtLast.put(rawKey, vs); Long pt = seatEvtTs.get(rawKey);
-                if (nowS - seatEvtWin > 3_600_000L) { seatEvtWin = nowS; seatEvtFlips.clear(); }
-                if (!vs.equals(pv) && pv != null && !seatEvtNoisy.contains(rawKey) && seatEvtFlips.merge(rawKey, 1, Integer::sum) > 10) {
-                    seatEvtNoisy.add(rawKey); postToD1("SEATEVT", "흔들림 많음(시간당 10번 넘게 바뀜) → 기록에서 뺌: " + rawKey);
-                }
-                if (!vs.equals(pv) && !seatEvtNoisy.contains(rawKey) && (pt == null || nowS - pt > 2000)) { seatEvtTs.put(rawKey, nowS); postToD1("SEATEVT", rawKey + "=" + vs + " (이전 " + pv + ") 시동=" + lastPowerLvl); }
-                // ★831 순정 뒷좌석 벨트 경고(com.byd.appserver RearSeatBeltAlarmMain)가 자리별로 보는 '벨트 알림 상태'(1=그 자리 빨강) — 상태값으로도 올린다
-                String rk = featureName.equals("SAFETY_BELT_LR2_REMIND_STATUS") ? "belt_rem_rl" : featureName.equals("SAFETY_BELT_MR2_REMIND_STATUS") ? "belt_rem_rc"
-                        : featureName.equals("SAFETY_BELT_RR2_REMIND_STATUS") ? "belt_rem_rr" : featureName.equals("SAFETY_BELT_RR_REMIND_STATUS") ? "belt_rem_pass" : null;
-                if (rk != null) { beltRem.put(rk, intVal); if (relay != null) relay.putStatus(rk, intVal); }
-            }
             // ★v115 ICC(ACC) 오프 효과음 — subai 방식: ADAS_ACC_MODE(852492340) 이벤트로 감지.
             if (featureId == 852492340) handleAccMode(intVal);
             // ★v129 ICC 차선 추적 — LEFT/RIGHT_LINE_TRACKING_STATUS·TJA_ICA_STATE 감지(값 raw 로깅 + 양측상실 경고).
@@ -13611,7 +13154,6 @@ public class SnifferService extends Service {
                 // 깜빡이를 새로 켰는데 이미 사각지대에 차가 있으면(BSD=2) 경보 — 타이밍(깜빡이가 나중) 대응
                 if (now && !was && lastBsdValue == 2) {
                     boolean alertOn = (prefs != null) && prefs.getBoolean(KEY_ALERT, false);
-                    BsdVision.get().onBsd("깜빡이 켬(BSD 이미 감지)");   // ★10-09 BSD 후측방 인식 측정
                     if (alertOn && autoAllowed()) bsdBeep("깜빡이 켬(BSD 이미 감지)");   // ★712 깜빡이 쪽 측후방 카메라 확인
                 }
                 onTurnSignalEvent(intVal);   // ★클러스터 2단계(2026-09-17) — 이벤트 즉시 getter로 좌/우 확정 → turnflash 푸시·측면 카메라(폴 600ms 안 기다림)
@@ -13691,7 +13233,6 @@ public class SnifferService extends Service {
             mainHandler.post(() -> { if (bsdListener != null) bsdListener.onBsdChanged(val); });
         }
         // 감지(값 2)일 때만 경보음. 값 1(안전)은 무음.
-        if (value == 2) BsdVision.get().onBsd("BSD 감지");   // ★10-09 BSD 후측방 인식 측정(동작 불변) — 깜빡이와 상관없이 양쪽 판정·기록
         if (value == 2) {
             boolean alertOn = (prefs != null) && prefs.getBoolean(KEY_ALERT, false);
             boolean turnOnly = (prefs != null) && prefs.getBoolean(KEY_TURN_ONLY, false);
@@ -13750,49 +13291,6 @@ public class SnifferService extends Service {
             finally { bsdCamBusy.set(false); }
         }, "bsdcam").start();
     }
-    // ★BSD 후측방 인식 측정(운영자 10-09) — BsdVision이 보는 바깥 면. 기존 BSD 경보 판정은 건드리지 않는다.
-    private final Object bsdKdLock = new Object();
-    private BsdVision.Host bsdVisionHost() {
-        return new BsdVision.Host() {
-            @Override public boolean enabled() { return BuildConfig.IS_OPERATOR && !DiLink5Support.isDiLink5() && (prefs == null || prefs.getBoolean("bsd_vision", true)); }
-            @Override public BsdVision.Frame frame() {
-                byte[] f = bsdExp.lastNv; long age = System.currentTimeMillis() - bsdExp.lastNvMs;
-                return (f == null || age > 1500) ? null : new BsdVision.Frame(f, bsdExp.lastW, bsdExp.lastH, age);
-            }
-            @Override public byte[] sideView(BsdVision.Frame f, int side) {
-                int[] tr = tileRect(f.w, f.h, side); int qw = tr[2], qh = tr[3]; boolean left = side == 2;
-                int rx = left ? 0 : (int) (0.74 * qw), ry = (int) (0.22 * qh), rw = (int) (0.26 * qw), rh = (int) (0.36 * qh);
-                com.cseini.motiondetect.ViewWarp vw = new com.cseini.motiondetect.ViewWarp(tr[0], tr[1], qw, qh, rx, ry, rw, rh, true, 163f, left ? -45f : 45f, false, 320, 320, false, 0f, 0f, 0f, 0f);
-                try {
-                    byte[] out = new byte[320 * 320 * 3 / 2];
-                    return vw.remap(f.nv21, f.w, f.h, out) ? out : null;
-                } finally { vw.close(); }
-            }
-            @Override public float[] oldBest(byte[] view) {
-                synchronized (bsdKdLock) {
-                    if (bsdKd == null) bsdKd = new com.cseini.motiondetect.KickDetector(getApplicationContext());
-                    if (!bsdKd.isReady()) return null;
-                    return bsdKd.analyzeClass(view, 320, 320, 0, 0, 320, 320, new int[]{2, 3, 5, 7});
-                }
-            }
-            @Override public float[][] yoloBoxes(byte[] view, float minScore) {
-                float[][] all = sentryObjectDetect(view, 320, 320, 0, 0, 320, 320, minScore);
-                if (all == null) return null;
-                java.util.ArrayList<float[]> v = new java.util.ArrayList<>();
-                for (float[] b : all) if (b[0] == 1f) v.add(b);   // 차량(승용·이륜·버스·트럭)만
-                return v.toArray(new float[0][]);
-            }
-            @Override public int turnDirection() {
-                if (!turnSignalActive) return 1;
-                Object o = relay != null ? relay.getStatus("turnflash") : null;
-                int tf = (o instanceof Integer) ? (Integer) o : 1;
-                return (tf == 2 || tf == 4) ? tf : 1;
-            }
-            @Override public java.io.File dir() { java.io.File d = getExternalFilesDir(null); return d != null ? d : getFilesDir(); }
-            @Override public void log(String msg) { postToD1("BSDVISION", msg); }
-        };
-    }
-
     // 측면 카메라 칸에서 측후방(좌캠은 화면 왼쪽·우캠은 오른쪽 = 차 뒤쪽, 배경 흐름으로 확인)만 겨냥해 320×320으로 펴고 차량 최고 점수.
     private float bsdSideScore(byte[] f, int w, int h, int side) {
         int[] tr = tileRect(w, h, side); int qw = tr[2], qh = tr[3]; boolean left = side == 2;
@@ -13824,7 +13322,7 @@ public class SnifferService extends Service {
         long now = System.currentTimeMillis();
         if (now - lastBeepMs < 1200) return;
         lastBeepMs = now;
-        // ★854 좌우 스피커 구분(운영자 10-09 "시험 없이 바로") — 깜빡이 방향(turnflash 2=좌·4=우) 쪽을 크게. 모르면 양쪽 같게.
+        // ★833 좌우 스피커 구분(운영자 10-09) — 깜빡이 방향(turnflash 2=좌·4=우) 쪽을 크게. 모르면 양쪽 같게.
         Object tfo = relay != null ? relay.getStatus("turnflash") : null;
         int side = (tfo instanceof Integer && ((Integer) tfo == 2 || (Integer) tfo == 4)) ? (Integer) tfo : 0;
         playBsd(bsdIdx(), (prefs != null ? prefs.getInt(KEY_BSD_VOL, 100) : 100) / 100f, side);

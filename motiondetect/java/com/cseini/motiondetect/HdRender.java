@@ -9,16 +9,16 @@ public final class HdRender {
     public void release() { if (win != 0) { YuvNative.winRelease(win); win = 0; } }
     public boolean attached() { return win != 0; }
 
-    /** warps=칸, xs·ys=내용 안 칸의 x·y(가로로 붙이면 xs, 세로로 붙이면 ys가 달라진다). 내용(contentW×contentH)은 버퍼(bufW×bufH) 가운데.
+    /** warps=칸(왼쪽부터), xs=내용 안 칸의 x. 내용(contentW×contentH)은 버퍼(bufW×bufH) 가운데.
      *  반환 0=그림 · -1=창 없음 · -2=잠금 실패 · -3=내용이 버퍼를 넘음 · -4=프레임 배열 못 얻음. */
-    public int render(byte[] nv21, int frameW, int frameH, ViewWarp[] warps, int[] xs, int[] ys, int contentW, int contentH, int bufW, int bufH) {
+    public int render(byte[] nv21, int frameW, int frameH, ViewWarp[] warps, int[] xs, int contentW, int contentH, int bufW, int bufH) {
         if (win == 0) return -1;
         long[] luts = new long[warps.length];
-        int[] meta = new int[warps.length * 5];
+        int[] meta = new int[warps.length * 4];
         for (int i = 0; i < warps.length; i++) {
             ViewWarp w = warps[i];
             luts[i] = w.lutHandle();
-            meta[i * 5] = w.tileX(); meta[i * 5 + 1] = w.tileY(); meta[i * 5 + 2] = w.mirrored() ? 1 : 0; meta[i * 5 + 3] = xs[i]; meta[i * 5 + 4] = ys[i];
+            meta[i * 4] = w.tileX(); meta[i * 4 + 1] = w.tileY(); meta[i * 4 + 2] = w.mirrored() ? 1 : 0; meta[i * 4 + 3] = xs[i];
         }
         return YuvNative.winRender(win, nv21, frameW, frameH, luts, meta, contentW, contentH, bufW, bufH);
     }

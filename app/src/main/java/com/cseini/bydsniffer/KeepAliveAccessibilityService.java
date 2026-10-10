@@ -47,22 +47,6 @@ public class KeepAliveAccessibilityService extends AccessibilityService {
         if (now - lastHb > 300_000) { lastHb = now; postToD1("A11Y", "앵커 생존 심박(접근성 프로세스 살아있음)"); }
         // ★v154 오토스타트 자동화 — 메인 프로세스가 트리거 파일 쓰면 현재 화면을 읽음. dumpsys/uiautomator가 앱uid라 막혀서 a11y가 유일 경로.
         if (now - lastCmdCheck > 1200) { lastCmdCheck = now; checkA11yCmd(); }
-        // ★830 돌핀 착좌 관찰(운영자 10-07) — 뒷좌석 벨트 경고 팝업을 띄운 앱·화면을 상시로 잡고, 그 순간 좌석 값 전체를 메인에 요청(seat_dump_req 파일).
-        if (BuildConfig.IS_OPERATOR) {
-            try {
-                java.util.List<CharSequence> tl = event.getText();
-                StringBuilder t = new StringBuilder();
-                if (tl != null) for (CharSequence c : tl) if (c != null && c.length() > 0) t.append(c).append("|");
-                CharSequence cd = event.getContentDescription();
-                if (cd != null && cd.length() > 0) t.append("[cd]").append(cd);
-                String txt = t.toString();
-                if (SEAT_TXT.matcher(txt).find() && (!txt.equals(lastSeatTxt) || now - lastSeatAt > 10_000)) {
-                    lastSeatTxt = txt; lastSeatAt = now;
-                    postToD1("A11YEVT", "벨트·좌석 팝업 pkg=" + event.getPackageName() + " type=" + event.getEventType() + " cls=" + event.getClassName() + " txt=" + txt.substring(0, Math.min(txt.length(), 220)));
-                    try (java.io.FileWriter w = new java.io.FileWriter(new java.io.File(getFilesDir(), "seat_dump_req"))) { w.write(txt.substring(0, Math.min(txt.length(), 60))); }
-                }
-            } catch (Throwable ignored) {}
-        }
         // ★v163 이벤트 캡처 모드 — 벨트/재실 팝업 뜨는 순간의 pkg+텍스트를 로깅(logcat 죽어서 대체). 텍스트 있는 이벤트만, 중복 제외.
         if (capUntil > now) {
             try {
@@ -82,8 +66,6 @@ public class KeepAliveAccessibilityService extends AccessibilityService {
     }
 
     private long capUntil = 0;
-    private static final java.util.regex.Pattern SEAT_TXT = java.util.regex.Pattern.compile("안전벨트|벨트|착좌|승객|탑승|(?i)belt|seat|occup");
-    private String lastSeatTxt = ""; private long lastSeatAt = 0;
     private String lastCapTxt = "";
 
     private long lastCmdCheck = 0, lastCmdTs = 0;

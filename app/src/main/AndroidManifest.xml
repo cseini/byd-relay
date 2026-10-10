@@ -2,8 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-permission android:name="com.byd.car.server.PROVIDER" />   <!-- ★832 차 속성 서비스(좌석·벨트 값) — normal 권한 -->
-
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- ★713/708 차 전체 데이터 사용량(NetworkStatsManager) — 앱 옵스는 폰이 요청할 때 릴레이가 ADB로 허용 -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions" />
@@ -195,6 +193,11 @@
 
         <!-- ★710/713 최근 앱 목록에서 숨김(운영자 10-03 "업데이트 뒤 활성앱에 릴레이가 두 개") — 업데이트·감시 부활의 am start가 새 카드를 만들어 옛 카드와 두 장이 되던 것. 목록에서 쓸어 꺼지는 일도 줄인다 -->
         <activity
+            android:name=".SentryViewerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
+        <activity
             android:name=".MainActivity"
             android:excludeFromRecents="true"
             android:exported="true">
@@ -203,13 +206,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- ★센트리 녹화 보기(10-08) — 헤드유닛에서 달력·목록·재생. 릴레이 자신의 /sentry/web 페이지를 WebView로 연다(운영자판만 버튼 노출) -->
-        <activity
-            android:name=".SentryViewerActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
 
         <!-- ★v209 주차 중 화면 깨우기 — 투명 Activity 윈도우 플래그(FLAG_TURN_SCREEN_ON) -->
         <activity

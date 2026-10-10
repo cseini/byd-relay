@@ -102,62 +102,6 @@ final class RemoteWebServer extends NanoHTTPD {
         return wifi;
     }
 
-    /** ★848 헤드유닛이 손님으로 붙은 와이파이 망의 인터페이스 이름들 */
-    private static java.util.Set<String> clientWifiIfaces(Context ctx) {
-        java.util.Set<String> clientIf = new java.util.HashSet<>();
-        try {
-            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
-            for (android.net.Network nw : cm.getAllNetworks()) {
-                android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(nw);
-                android.net.LinkProperties lp = cm.getLinkProperties(nw);
-                if (nc != null && lp != null && nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) && lp.getInterfaceName() != null) clientIf.add(lp.getInterfaceName());
-            }
-        } catch (Throwable ignored) {}
-        return clientIf;
-    }
-
-    /** ★848 헤드유닛이 직접 켠 핫스팟 주소 — 와이파이 계열 인터페이스 중 '손님으로 붙은 와이파이'(ConnectivityManager WIFI 망)의 인터페이스를 뺀 나머지. p2p 제외. */
-    static List<String> apIps(Context ctx) {
-        List<String> out = new ArrayList<>();
-        java.util.Set<String> clientIf = clientWifiIfaces(ctx);
-        try {
-            Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
-            while (en != null && en.hasMoreElements()) {
-                NetworkInterface ni = en.nextElement();
-                if (!ni.isUp() || ni.isLoopback() || clientIf.contains(ni.getName())) continue;
-                String n = ni.getName().toLowerCase();
-                if (!(n.startsWith("wlan") || n.startsWith("ap") || n.startsWith("swlan") || n.startsWith("softap"))) continue;
-                Enumeration<InetAddress> ad = ni.getInetAddresses();
-                while (ad.hasMoreElements()) {
-                    InetAddress a = ad.nextElement();
-                    if (a instanceof Inet4Address && !a.isLoopbackAddress()) out.add(a.getHostAddress());
-                }
-            }
-        } catch (Throwable ignored) {}
-        return out;
-    }
-
-    /** ★848 진단 로그용 — "wlan0=172.20.10.7(손님) ap0=192.168.43.1" 형태. 차종별 핫스팟 인터페이스 이름 확인용. */
-    static String ifaceSummary(Context ctx) {
-        java.util.Set<String> clientIf = clientWifiIfaces(ctx);
-        StringBuilder sb = new StringBuilder();
-        try {
-            Enumeration<NetworkInterface> en = NetworkInterface.getNetworkInterfaces();
-            while (en != null && en.hasMoreElements()) {
-                NetworkInterface ni = en.nextElement();
-                if (!ni.isUp() || ni.isLoopback()) continue;
-                Enumeration<InetAddress> ad = ni.getInetAddresses();
-                while (ad.hasMoreElements()) {
-                    InetAddress a = ad.nextElement();
-                    if (!(a instanceof Inet4Address)) continue;
-                    if (sb.length() > 0) sb.append(' ');
-                    sb.append(ni.getName()).append('=').append(a.getHostAddress()).append(clientIf.contains(ni.getName()) ? "(손님)" : "");
-                }
-            }
-        } catch (Throwable ignored) {}
-        return sb.toString();
-    }
-
     private static boolean isPrivate(String ip) {
         if (ip == null) return false;
         ip = ip.trim().toLowerCase();

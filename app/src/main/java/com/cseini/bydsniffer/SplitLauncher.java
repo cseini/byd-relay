@@ -285,7 +285,6 @@ final class SplitLauncher {
         String l = t.toLowerCase(Locale.US);
         if (l.contains("split-screen-primary")) return 3;
         if (l.contains("split-screen-secondary")) return 4;
-        if (l.contains("freeform")) return 5;
         return -1;
     }
 
@@ -296,39 +295,6 @@ final class SplitLauncher {
             if (st[0] >= 0 && st[1] == mode) { log.append(tag).append(" ok poll=").append(i).append(" task=").append(st[0]).append('\n'); return true; }
         }
         log.append(tag).append(" timeout\n"); return false;
-    }
-
-    // ★861 링크락 런처 A안(운영자 10-10) — 자유 창(freeform, windowingMode 5). 전제: enable_freeform_support=1·force_resizable_activities=1·재부팅.
-    //   --windowingMode 카멜케이스만 된다(하이픈 실패, 10-09 실차). 이미 떠 있는 task는 mode가 안 바뀌어 자유 창이 아니면 force-stop 뒤 새 task로 띄운다.
-    static String launchFreeform(Context ctx, String pkg, int l, int t, int r, int b, StringBuilder log) {
-        String comp = pkg.indexOf('/') > 0 ? pkg : resolveLauncher(ctx, pkg);
-        if (comp == null) return "실패 실행할 화면 없음 " + pkg;
-        String p = comp.substring(0, comp.indexOf('/'));
-        int[] st = taskState(ctx, p);
-        if (st[0] >= 0 && st[1] != 5) cmd(ctx, "am force-stop " + q(p), log);
-        if (!cmd(ctx, "am start --user 0 --windowingMode 5 -n " + q(comp), log)) return "실패 실행 " + comp;
-        if (!waitMode(ctx, p, 5, "freeform", log)) return "실패 자유 창으로 안 뜸 " + p;
-        int task = taskState(ctx, p)[0];
-        boolean ok = cmd(ctx, "am task resize " + task + " " + l + " " + t + " " + r + " " + b, log);
-        return (ok ? "자유 창 OK task=" : "자유 창은 떴지만 크기 실패 task=") + task + " " + p;
-    }
-    static String resizeTask(Context ctx, String target, int l, int t, int r, int b, StringBuilder log) {
-        int task = target.matches("\\d+") ? Integer.parseInt(target) : taskState(ctx, target)[0];
-        if (task < 0) return "실패 창 없음 " + target;
-        return (cmd(ctx, "am task resize " + task + " " + l + " " + t + " " + r + " " + b, log) ? "크기 OK task=" : "크기 실패 task=") + task;
-    }
-    // 홈(런처)이 앞에 오면 자유 창이 가려진다 — 그 앱 화면을 다시 띄우면 기존 task가 창 모드 그대로 앞으로 온다.
-    static String bringFront(Context ctx, String pkg, StringBuilder log) {
-        String comp = pkg.indexOf('/') > 0 ? pkg : resolveLauncher(ctx, pkg);
-        if (comp == null) return "실패 실행할 화면 없음 " + pkg;
-        int[] st = taskState(ctx, comp.substring(0, comp.indexOf('/')));
-        if (st[0] < 0) return "실패 창 없음 " + pkg;
-        return (cmd(ctx, "am start --user 0 -n " + q(comp), log) ? "앞으로 OK task=" : "앞으로 실패 task=") + st[0] + " mode=" + st[1];
-    }
-    private static String resolveLauncher(Context ctx, String pkg) {
-        Res r = adb(ctx, "cmd package resolve-activity --brief -c android.intent.category.LAUNCHER " + q(pkg) + " 2>&1 | tail -1");
-        String c = one(r.out);
-        return (r.ok && c.indexOf('/') > 0 && !c.contains(" ")) ? c : null;
     }
 
     private static boolean cmd(Context ctx, String c, StringBuilder log) {
