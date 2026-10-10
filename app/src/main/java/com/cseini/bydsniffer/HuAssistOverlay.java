@@ -31,7 +31,9 @@ final class HuAssistOverlay {
     /** ★733 원본 프레임(NV21 띠·4분할 전체) — seq 단조증가, ts=받은 시각. nv는 ClusterCam 순환 버퍼라 받은 즉시 그려야 한다. */
     static final class Nv {
         final byte[] nv; final int w, h; final long seq, ts = System.currentTimeMillis();
-        Nv(byte[] nv, int w, int h, long seq) { this.nv = nv; this.w = w; this.h = h; this.seq = seq; }
+        final int[] cols;   // ★865 이 장에서 새로 복사된 가로 구간(null=전체)
+        Nv(byte[] nv, int w, int h, long seq) { this(nv, w, h, seq, null); }
+        Nv(byte[] nv, int w, int h, long seq, int[] cols) { this.nv = nv; this.w = w; this.h = h; this.seq = seq; this.cols = cols; }
     }
     /** ★733 창 크기 보정표 묶음 — 칸·내용 안 칸 x·y(★815 세로로 붙이면 y가 다름)·내용 크기·버퍼 크기. key가 같으면 다시 안 만든다. */
     static final class Layout {
@@ -48,6 +50,7 @@ final class HuAssistOverlay {
         long[] camCounts();   // ★792 누적 {카메라가 넣은 장, 복사 횟수, 복사 µs} — 돌핀 서피스 경로만, 아니면 null
         void boostCam(boolean on);   // ★814 창이 떠 있는 동안 카메라 SDK 프레임 생성 스레드 우선순위 올림(창 수만큼 짝 맞춰 부름)
         void reboostCam();           // ★814 카메라를 다시 열어 스레드가 새로 생겼을 때 다시 적용(실측 줄마다)
+        default boolean covers(Nv f, int side) { return true; }   // ★865 이 장이 그 창의 칸을 새로 복사했나(방향을 바꾼 직전 장은 옛 칸이 남아 있다)
     }
     interface Log { void d(String msg); }
 
@@ -95,6 +98,7 @@ final class HuAssistOverlay {
 
     /** ★733 JPEG가 필요한가 — 직접 그리기가 안 되는 기기에서 카메라 화면을 띄우고 있을 때만(ClusterCam이 이때만 인코딩). */
     boolean needsJpeg() { return shownSide != 0 && !adjusting && hdBroken; }
+    int shownSide() { return shownSide; }   // ★865 원본 복사 범위(창이 직접 그리는 칸만) 판단용
 
     /** 이 상황(2/4=깜빡이, 8=후진)을 헤드유닛에 띄우도록 켜져 있나. */
     boolean wants(int side) {
@@ -202,9 +206,12 @@ final class HuAssistOverlay {
     // ★756 그리기 버퍼는 창보다 작게(화면 합성기가 창 크기로 늘림) — 운영자 10-05 "카메라 보조가 너무 끊긴다": 돌핀에서 창 1034×744(77만 화소)를 그리는 데
     //   평균 130~155ms → 6~7fps(카메라는 25fps). 화소마다 원본(5120×960)을 띄엄띄엄 읽느라 메모리 대기가 길어 화소 수에 비례한다.
     //   22만 화소로 줄이면 약 40ms → 20fps 이상. 원본 영역(약 768×640~896×624)보다 크게 그리던 몫이라 화질 손해는 작다.
-    private static final float PX_BUDGET = 220_000f;
+    // ★865 화질 3단계(운영자 10-10 "화질을 몇 가지 선택") — 가벼움 12만·보통 22만(종전)·선명 40만 화소. 화소 수에 비례해 그리기 시간이 늘어 선명은 프레임이 준다.
+    private static volatile float pxBudget = 220_000f;
+    static final int[] QUALITY_PX = {120_000, 220_000, 400_000};
+    static void setQuality(int q) { pxBudget = QUALITY_PX[Math.max(0, Math.min(2, q))]; }
     private static int[] capBuf(int w, int h) {
-        float s = Math.min(1f, Math.min(Math.min(1600f / Math.max(1, w), 1000f / Math.max(1, h)), (float) Math.sqrt(PX_BUDGET / Math.max(1f, (float) w * h))));
+        float s = Math.min(1f, Math.min(Math.min(1600f / Math.max(1, w), 1000f / Math.max(1, h)), (float) Math.sqrt(pxBudget / Math.max(1f, (float) w * h))));
         return new int[]{Math.max(2, (int) (w * s) & ~1), Math.max(2, (int) (h * s) & ~1)};
     }
 
@@ -419,7 +426,7 @@ final class HuAssistOverlay {
             Layout L = null;
             if (f != null && now - f.ts <= 500) {
                 int[] b = targetBuf(now);
-                if (b != null) {
+                if (b != null && src.covers(f, shownSide)) {
                     L = layoutFor(shownSide, f.w, f.h, b[0], b[1]);
                     if (L != null && System.currentTimeMillis() - now > 30) continue;   // 보정표를 새로 만드느라 늦었으면 이 프레임은 버림(순환 버퍼가 덮였을 수 있음)
                 }

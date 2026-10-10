@@ -433,6 +433,7 @@ public class SnifferService extends Service {
             } catch (Throwable ignored) {}
             new Thread(() -> { try { Thread.sleep(20000); } catch (InterruptedException ignored) {} postToD1("SPLIT", SplitLauncher.probe(this)); }, "splitprobe").start();
             loadSplitPrefs(); startSplitRatioKeeper();   // ★642 분할 비율 기억·유지   // ★부팅 1회 분할 지원 프로브(씨라이언7 판정용, 읽기 전용)
+            HuAssistOverlay.setQuality(prefs.getInt("hu_quality", 1));   // ★865
             if (huOverlay == null) huOverlay = new HuAssistOverlay(this, prefs, clusterCam, m -> postToD1("HUASSIST", m));   // ★728 헤드유닛 카메라 창 ★733 원본 직접 그리기
             if (huOverlay2 == null) huOverlay2 = new HuAssistOverlay(this, prefs, clusterCam, m -> postToD1("HUASSIST", "[오른쪽 창] " + m));   // ★748 후진 D 오른쪽 따로 창
             if (BuildConfig.IS_OPERATOR && !DiLink5Support.isDiLink5()) {   // ★788 씨라7은 헬퍼 관리 끔(오토스타트 해제가 필요 없는 차종)
@@ -5905,6 +5906,7 @@ public class SnifferService extends Service {
         try { detectStop(); } catch (Throwable ignored) {}
         try { rtcStop(); } catch (Throwable ignored) {}
         try { clusterCam.stopNow("카메라 끔"); } catch (Throwable ignored) {}
+        try { bsdExp.stopNow("카메라 끔"); } catch (Throwable ignored) {}   // ★865
         camStreaming = false; h264Streaming = false;
     }
     // ★신호등 정차 사진(운영자 10-03 "앞차진단은 포기, 신호등 관련 정차사진만 남기자") — 정차 중엔 cache/tldiag에 모았다가 정차가 끝날 때
@@ -8710,6 +8712,23 @@ public class SnifferService extends Service {
                 return null;
             }
         }
+        // ★865 헤드유닛 창 화질(0 가벼움 · 1 보통 · 2 선명) · copy_crop(창이 그리는 칸만 복사, 기본 켬 — 문제 시 끄는 스위치). 이것만 온 명령이면 다른 설정은 그대로.
+        if (p.has("quality") || p.has("copy_crop")) {
+            if (p.has("quality")) {
+                int q = Math.max(0, Math.min(2, p.optInt("quality", 1)));
+                prefs.edit().putInt("hu_quality", q).apply();
+                HuAssistOverlay.setQuality(q);
+                postToD1("HUASSIST", "헤드유닛 창 화질 " + (q == 0 ? "가벼움" : q == 2 ? "선명" : "보통") + "(" + HuAssistOverlay.QUALITY_PX[q] / 10000 + "만 화소) — 다음에 창이 뜰 때부터");
+            }
+            if (p.has("copy_crop")) {
+                prefs.edit().putBoolean("hu_copy_crop", p.optBoolean("copy_crop", true)).apply();
+                postToD1("HUASSIST", "원본 칸만 복사 " + (prefs.getBoolean("hu_copy_crop", true) ? "켬" : "끔"));
+            }
+            if (!p.has("place") && !p.has("turn") && !p.has("rev") && !p.has("hide_ms") && !p.has("rev_arr")) {
+                publishHuAssist();
+                return null;
+            }
+        }
         // ★739 신호가 끝나고 영상이 사라지기까지(0~3초, 0.1초 단위, 기본 1초) — 폰 964~가 함께 보낸다. 이것만 온 명령이면 다른 설정은 그대로.
         if (p.has("hide_ms")) {
             prefs.edit().putInt("hu_hide_ms", Math.max(0, Math.min(3000, p.optInt("hide_ms", 1000)))).apply();
@@ -8729,7 +8748,7 @@ public class SnifferService extends Service {
             onT = p.optBoolean("turn"); onR = p.optBoolean("rev");
             place = (onT || onR) ? "hu" : prefs.getString("assist_place", "phone");
         }
-        boolean hu = "hu".equals(place);
+        boolean hu = true;   // ★865 폰 화면 표시 제거(운영자 10-10 "딜레이·끊김이 심하니 헤드유닛에만") — 옛 폰이 place=phone을 보내도 헤드유닛 창으로. place는 받은 그대로 저장(폰의 1분 재전송 비교가 어긋나지 않게)
         prefs.edit().putBoolean("assist_on_turn", onT).putBoolean("assist_on_rev", onR).putString("assist_place", place)
                 .putBoolean("hu_assist_turn", hu && onT).putBoolean("hu_assist_rev", hu && onR).apply();
         publishHuAssist();
@@ -8742,9 +8761,13 @@ public class SnifferService extends Service {
         if (relay == null || prefs == null) return;
         if (!prefs.contains("assist_place") && (prefs.getBoolean("hu_assist_turn", false) || prefs.getBoolean("hu_assist_rev", false)))   // ★729 728에서 켠 헤드유닛 창 설정 이어받기
             prefs.edit().putBoolean("assist_on_turn", prefs.getBoolean("hu_assist_turn", false)).putBoolean("assist_on_rev", prefs.getBoolean("hu_assist_rev", false)).putString("assist_place", "hu").apply();
+        // ★865 헤드유닛에만 — 예전에 '폰'을 골라 둔 차도 켜 둔 보조는 헤드유닛 창으로(그 폰이 다시 안 보내도)
+        if (prefs.getBoolean("hu_assist_turn", false) != prefs.getBoolean("assist_on_turn", false) || prefs.getBoolean("hu_assist_rev", false) != prefs.getBoolean("assist_on_rev", false))
+            prefs.edit().putBoolean("hu_assist_turn", prefs.getBoolean("assist_on_turn", false)).putBoolean("hu_assist_rev", prefs.getBoolean("assist_on_rev", false)).apply();
         relay.putStatus("hu_assist", (prefs.getBoolean("hu_assist_turn", false) ? "turn" : "") + "," + (prefs.getBoolean("hu_assist_rev", false) ? "rev" : ""));
         relay.putStatus("assist_cfg", "t" + (prefs.getBoolean("assist_on_turn", false) ? 1 : 0) + "r" + (prefs.getBoolean("assist_on_rev", false) ? 1 : 0) + "@" + prefs.getString("assist_place", "phone"));   // ★729 폰이 자기 설정과 비교해 다르면 다시 보낸다
         relay.putStatus("assist_hide", prefs.getInt("hu_hide_ms", 1000));   // ★739 따로 둔다(assist_cfg 모양을 바꾸면 963 이하 폰이 1분마다 다시 보냄)
+        relay.putStatus("assist_quality", prefs.getInt("hu_quality", 1));   // ★865 이 값이 있으면 폰은 '화질 선택 지원'으로 본다
         relay.putStatus("assist_rev_arr", prefs.getInt("hu_rev_arr", 0));   // ★815 후진 D 헤드유닛 배치 — 따로 둔다(같은 이유). 이 값이 있으면 폰은 '이 릴레이가 배치 선택을 지원'으로 본다
     }
     // ★739 재부팅 루틴 방지(운영자 10-04 "일렉트로처럼") — BYD 클라이언트 설정 서비스(CloudReboot)는 시동 꺼짐·잠금 상태에서 헤드유닛이 24시간
@@ -9780,6 +9803,8 @@ public class SnifferService extends Service {
             } catch (Throwable t) { postToD1("HUASSIST", "카메라 SDK 스레드 우선순위 " + (on ? "올리기" : "되돌리기") + " 실패 " + t.getClass().getSimpleName() + ": " + t.getMessage()); }
         }
         byte[] tileJpeg(int sd) {
+            fullCopyUntil = System.currentTimeMillis() + 10_000;   // ★865 편집 원본은 다른 칸도 필요 — 칸만 복사하던 중이면 전체 복사된 다음 장을 기다린다
+            if (lastCopyPartial) try { Thread.sleep(200); } catch (InterruptedException ignored) {}
             byte[] nv = tileNv; int w = tileW, h = tileH;
             // ★656 편집기 '원본' 요청 기록 — 운영자 09-29 "우측·후면이 안 나옴"이 카메라 미준비인지 인코딩 실패인지 기록 없이는 못 가림.
             if (!active || nv == null || w <= 0 || h <= 0) { postToD1("CLUSTER", "편집 원본 side=" + sd + " 없음 — 카메라 " + (active ? "프레임 대기" : "미시작") + " (프레임 " + (nv != null ? "있음" : "없음") + " " + w + "x" + h + ")"); return null; }
@@ -10054,7 +10079,19 @@ public class SnifferService extends Service {
         // ★733 헤드유닛 창 직접 그리기 — 원본 NV21(순환 버퍼 그대로)과 창 크기 보정표를 HuAssistOverlay에 준다.
         private final Object nvLock = new Object();
         private volatile HuAssistOverlay.Nv lastNv; private long nvSeq;
-        private void publishNv(byte[] nv, int w, int h) { synchronized (nvLock) { lastNv = new HuAssistOverlay.Nv(nv, w, h, ++nvSeq); nvLock.notifyAll(); } }
+        private void publishNv(byte[] nv, int w, int h) { publishNv(nv, w, h, null); }
+        private void publishNv(byte[] nv, int w, int h, int[] cols) { synchronized (nvLock) { lastNv = new HuAssistOverlay.Nv(nv, w, h, ++nvSeq, cols); nvLock.notifyAll(); } }
+        @Override public boolean covers(HuAssistOverlay.Nv f, int side) {
+            if (f == null || f.cols == null) return true;
+            int[] sp = spanBySide.get(side);
+            if (sp == null) return false;
+            for (int i = 0; i + 1 < sp.length; i += 2) {
+                boolean in = false;
+                for (int k = 0; k + 1 < f.cols.length; k += 2) if (f.cols[k] <= (sp[i] & ~1) && f.cols[k + 1] >= Math.min(f.w, (sp[i + 1] + 1) & ~1)) { in = true; break; }
+                if (!in) return false;
+            }
+            return true;
+        }
         @Override public RemoteWebServer.Frame next(long afterSeq, long waitMs) { return frameAfter(afterSeq, waitMs); }
         @Override public HuAssistOverlay.Nv nextNv(long afterSeq, long waitMs) {
             synchronized (nvLock) {
@@ -10070,7 +10107,53 @@ public class SnifferService extends Service {
         }
         private String huFailKey = "";
         /** 폰과 같은 설정(깜빡이=ccam_2·4 커스텀 뷰, 후진=좌·후·우 파노라마 또는 ccam_8)으로 창 버퍼(bw×bh) 안에 비율 그대로 가장 크게. */
+        // ★865 헤드유닛 창 끊김(운영자 10-10) — 매 장 원본 5120×960(약 7MB)을 통째로 복사하는 데 11~15ms가 들었다(그리기 22~44ms와 별도).
+        //   창이 직접 그리는 칸(보정표가 읽는 타일)만 복사하면 1/4~1/2로 준다. 보정표 좌표는 타일 기준이라 칸 하나 = 타일 가로 전체.
+        private final java.util.concurrent.ConcurrentHashMap<Integer, int[]> spanBySide = new java.util.concurrent.ConcurrentHashMap<>();
+        private volatile long fullCopyUntil = 0;   // 편집 원본처럼 다른 칸이 필요한 요청이 오면 잠시 전체 복사
+        private volatile boolean lastCopyPartial = false;
         @Override public HuAssistOverlay.Layout layout(int sd, int fw, int fh, int bw, int bh, HuAssistOverlay.Layout prev) {
+            HuAssistOverlay.Layout L = layout0(sd, fw, fh, bw, bh, prev);
+            if (L != null && L != prev) {
+                int tw = fw >= 4 * fh ? fw / 4 : fw / 2;
+                java.util.TreeSet<Integer> xs = new java.util.TreeSet<>();
+                for (com.cseini.motiondetect.ViewWarp w : L.warps) if (w != null) xs.add(w.tileX());
+                int[] sp = new int[xs.size() * 2]; int i = 0;
+                for (int x : xs) { sp[i++] = x; sp[i++] = Math.min(fw, x + tw); }
+                spanBySide.put(sd, sp);
+            }
+            return L;
+        }
+        /** 이번 장에 복사할 원본 가로 구간 [x0,x1,…](정렬·겹침 없음). null = 전체 복사(폰 화면·JPEG 창·편집 원본·아직 보정표 없음 등 다른 소비자가 있을 때). */
+        private int[] copyCols(int w, int h) {
+            if (prefs != null && !prefs.getBoolean("hu_copy_crop", true)) return null;   // 끄는 스위치(HUASSIST {"copy_crop":false})
+            if (watched() || System.currentTimeMillis() < fullCopyUntil) return null;
+            java.util.TreeMap<Integer, Integer> m = new java.util.TreeMap<>();
+            boolean any = false;
+            for (HuAssistOverlay o : new HuAssistOverlay[]{huOverlay, huOverlay2}) {
+                int sd = o != null ? o.shownSide() : 0;
+                if (sd == 0) continue;
+                int[] sp = spanBySide.get(sd);
+                if (sp == null) return null;
+                for (int i = 0; i + 1 < sp.length; i += 2) m.merge(sp[i], sp[i + 1], Math::max);
+                any = true;
+            }
+            if (!any) return null;
+            if (BuildConfig.IS_OPERATOR && !IS_D5 && bsdExp.enabled && lastDriving == 1) {   // 깜빡이 기록 실험은 좌·우 칸을 쓴다
+                for (int sd : new int[]{2, 4}) { int[] r = tileRect(w, h, sd); m.merge(r[0], r[0] + r[2], Math::max); }
+            }
+            java.util.ArrayList<Integer> out = new java.util.ArrayList<>(); int total = 0;
+            for (java.util.Map.Entry<Integer, Integer> e : m.entrySet()) {
+                int x0 = e.getKey() & ~1, x1 = Math.min(w, (e.getValue() + 1) & ~1);
+                int n = out.size();
+                if (n > 0 && x0 <= out.get(n - 1)) { if (x1 > out.get(n - 1)) { total += x1 - out.get(n - 1); out.set(n - 1, x1); } continue; }
+                out.add(x0); out.add(x1); total += x1 - x0;
+            }
+            if (out.isEmpty() || total * 4 >= w * 3) return null;   // 3/4 이상이면 그냥 전체
+            int[] r = new int[out.size()]; for (int i = 0; i < r.length; i++) r[i] = out.get(i);
+            return r;
+        }
+        private HuAssistOverlay.Layout layout0(int sd, int fw, int fh, int bw, int bh, HuAssistOverlay.Layout prev) {
             if (sd == 82 || sd == 84) {   // ★748 후진 D 따로 창 — D(B와 같은) 사이드미러 내려 보기 한 칸을 창 버퍼 가득(창 크기·비율은 운영자가 ◢로)
                 String key = sd + "|" + fw + "x" + fh + "|" + bw + "x" + bh + "|" + ccamGen;
                 if (prev != null && prev.key.equals(key)) return prev;
@@ -10206,18 +10289,29 @@ public class SnifferService extends Service {
                             //   복사 전에 Y 평면 remaining이 필요한 만큼 있는지 보고, 모자라면 이 프레임만 건너뛴다(크래시 대신). 재부팅 잦은 차에서 간헐 발생.
                             long yNeed = yRow == w ? (long) ySize : (long) yRow * (h - 1) + w;
                             if (yb.remaining() < yNeed) { if ((surfFc % 50) == 1) postToD1("CLUSTER", "서피스 프레임 비정상(Y 버퍼 " + yb.remaining() + " < 필요 " + yNeed + ", " + w + "x" + h + ") → 이 프레임 건너뜀"); return; }
-                            if (yRow == w) yb.get(c, 0, ySize);
-                            else for (int y = 0; y < h; y++) { yb.position(y * yRow); yb.get(c, y * w, w); }
+                            int[] cols = copyCols(w, h);   // ★865 창이 그리는 칸만
                             java.nio.ByteBuffer vb = pl[2].getBuffer().duplicate();   // V 평면(픽셀간격2)=VU 인터리브 = NV21 그대로
                             int uvLen = Math.min(vb.remaining(), ySize / 2 - 1);
-                            vb.get(c, ySize, uvLen);
+                            if (cols != null) {
+                                int yBase = yb.position(), vBase = vb.position();
+                                for (int y = 0; y < h; y++) for (int k = 0; k + 1 < cols.length; k += 2) { yb.position(yBase + y * yRow + cols[k]); yb.get(c, y * w + cols[k], cols[k + 1] - cols[k]); }
+                                for (int ur = 0; ur < h / 2; ur++) for (int k = 0; k + 1 < cols.length; k += 2) {
+                                    int off = ur * w + cols[k], len = Math.min(cols[k + 1] - cols[k], uvLen - off);
+                                    if (len > 0) { vb.position(vBase + off); vb.get(c, ySize + off, len); }
+                                }
+                            } else {
+                                if (yRow == w) yb.get(c, 0, ySize);
+                                else for (int y = 0; y < h; y++) { yb.position(y * yRow); yb.get(c, y * w, w); }
+                                vb.get(c, ySize, uvLen);
+                            }
+                            lastCopyPartial = cols != null;
                             java.nio.ByteBuffer ub = pl[1].getBuffer();
                             if (ub.limit() > 0) c[size - 1] = ub.get(ub.limit() - 1);   // 마지막 U 1바이트
                             copyUs += (System.nanoTime() - cpT0) / 1000; copyN++;
                             pi[0] = (pi[0] + 1) % pool.length;
                             meta[0] = w; meta[1] = h; latestNv[0] = c; fc[0]++;
                             tileNv = c; tileW = w; tileH = h;
-                            publishNv(c, w, h);   // ★733 헤드유닛 창 직접 그리기
+                            publishNv(c, w, h, cols);   // ★733 헤드유닛 창 직접 그리기 ★865 복사한 칸 함께
                             if (!surfOk[0]) { surfOk[0] = true; postToD1("CLUSTER", "서피스 프레임 직접 사용 " + w + "x" + h + " (콜백 경로 중지)"); if (huOverlay != null) huOverlay.prewarm(w, h); if (huOverlay2 != null) huOverlay2.prewarm(w, h); }
                         } catch (Throwable t) {
                             if (!surfFail[0]) { surfFail[0] = true; surfOk[0] = false; postToD1("CLUSTER", "서피스 프레임 변환 실패 " + rootMsg(t) + " → 콜백 경로 유지"); }
@@ -10334,6 +10428,7 @@ public class SnifferService extends Service {
         synchronized void startForTurn() {
             if (!autoAllowed()) return;   // ★620
             if (lastDriving != 1 || !turnSignalActive || !enabled || DiLink5Support.isDiLink5() || !BuildConfig.IS_OPERATOR) return;
+            if (camOffOn()) return;   // ★865 앱 설정 카메라 끔이면 이 실험도 카메라를 열지 않는다(운영자 10-10 "카메라 끄면 비틀과 충돌 없게")
             if (active || rtcActive || camStreaming || h264Streaming || (detectActive && (detectAvm || !camDualOk())) || clusterCam.active) return;
             long now = System.currentTimeMillis();
             if (now - lastStopMs < 1000) return;   // 닫자마자 다시 열기 방지

@@ -40,7 +40,7 @@ public final class ViewWarp {
     public int height() { return dstH; }
     // ★733 HdRender(같은 패키지)가 창 버퍼에 바로 그릴 때 쓴다.
     long lutHandle() { return lut; }
-    int tileX() { return tileX; }
+    public int tileX() { return tileX; }
     int tileY() { return tileY; }
     boolean mirrored() { return mirror; }
     /** out = dstW*dstH*3/2 바이트(NV21). 생성 실패(lut=0)면 false. */
