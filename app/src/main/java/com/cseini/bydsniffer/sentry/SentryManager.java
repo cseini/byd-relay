@@ -1,5 +1,6 @@
 package com.cseini.bydsniffer.sentry;
 
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.MediaFormat;
@@ -96,6 +97,10 @@ public final class SentryManager {
     private volatile String lastEvent = "";
     private volatile int eventsCache;
     private volatile long usedMbCache;
+    private volatile int spaceLevelCache;   // 0 여유 · 1 80%↑ · 2 95%↑ · 3 가득(한도 도달 또는 기기 여유 부족) — "지우지 않고 녹화 중지"(when_full=stop)일 때만 0이 아니다
+    private volatile int spacePctCache;
+    private int spaceNotified = -1;         // 이미 알린 가장 높은 단계(-1=prefs에서 아직 안 읽음)
+    static final int SPACE_WARN_PCT = 80, SPACE_CRIT_PCT = 95, SPACE_MIN_FREE_MB = 500;
     private volatile long ignOffAtUptime;      // 0 = 이 프로세스에서 시동 OFF를 못 봄
     private volatile long lastOwnStopUptime;
     private volatile int sessionGen;           // 카메라 세션(무장) 단위 번호 — 호스트가 세션 종료 신호에 실어 보낸다
@@ -279,6 +284,8 @@ public final class SentryManager {
                 log("시동 ON — 센트리 즉시 중지");
                 storageYield = null;
                 stopSession(State.IDLE, "시동 켜짐", true);
+                final long ignOnWall = System.currentTimeMillis();
+                handler.postDelayed(() -> finishSession(ignOnWall), SUMMARY_DELAY_MS);   // 진행 중이던 이벤트가 닫힌 뒤에 센다
             } else {
                 ignOffAtUptime = SystemClock.uptimeMillis();
                 handler.removeCallbacks(armTask);
@@ -291,6 +298,75 @@ public final class SentryManager {
                 log("시동 OFF — 20초 뒤 센트리 게이트 평가");
             }
         });
+    }
+
+    // ───────────── 센트리 가동 요약(운영자 10-10: 시동 끈 뒤 가동~시동 켤 때까지의 시작·종료 시각과 녹화 건수를 폰 푸시·릴레이 음성으로, 1건 이상일 때만) ─────────────
+    static final long SUMMARY_DELAY_MS = 4000L;
+    static final String PREF_SESS_START = "sentry_sess_start";      // 이번 구간 시작(벽시계 ms, 0=없음) — 릴레이가 재시작돼도 남는다
+    static final String PREF_SUM_PENDING = "sentry_sum_pending";    // 아직 음성으로 안 읽은 요약 JSON
+
+    // 시동이 꺼진 뒤 센트리가 처음 무장된 시각을 구간 시작으로 잡는다(이후 카메라 양보로 쉬었다 다시 무장돼도 같은 구간)
+    private void noteSessionStart() {
+        try {
+            if (host.ignitionState() == 1) return;
+            SharedPreferences p = host.prefs();
+            if (p.getLong(PREF_SESS_START, 0L) == 0L) p.edit().putLong(PREF_SESS_START, System.currentTimeMillis()).apply();
+        } catch (Throwable ignored) {}
+    }
+
+    // 구간 안에 시작한 이벤트 수. startMs가 구간 시작 이후인 것만
+    static int countSince(java.util.List<SentryIndex.EventMeta> all, long sinceMs) {
+        int n = 0;
+        for (SentryIndex.EventMeta m : all) if (m.startMs >= sinceMs) n++;
+        return n;
+    }
+
+    // 요약 이벤트 이름 — 워커가 32자까지만 통과시킨다. "ssum:<건수>:<가동 분>" (예: ssum:12:627). 시작 시각은 받은 시각에서 가동 분을 빼 구한다
+    static String summaryEvent(int count, long durMin) {
+        return "ssum:" + count + ":" + Math.max(0L, durMin);
+    }
+
+    private void finishSession(long endWall) {
+        try {
+            SharedPreferences p = host.prefs();
+            long start = p.getLong(PREF_SESS_START, 0L);
+            if (start == 0L) return;
+            p.edit().putLong(PREF_SESS_START, 0L).apply();
+            if (endWall - start > 3L * 24L * 3600_000L || endWall < start) { log("센트리 가동 요약 건너뜀 — 구간이 비정상(옛 기록)"); return; }
+            SentryIndex idx = index;
+            if (idx == null) return;
+            int count = countSince(idx.allOldestFirst(), start);
+            long durMin = Math.max(0L, (endWall - start) / 60000L);
+            if (count < 1) { log("센트리 가동 요약 — 녹화 0건이라 알리지 않음(가동 " + durMin + "분)"); return; }
+            JSONObject o = new JSONObject().put("startMs", start).put("endMs", endWall).put("count", count);
+            SharedPreferences.Editor ed = p.edit().putString("sentry_sum_last", o.toString());
+            if (settings.summaryAnnounce) ed.putString(PREF_SUM_PENDING, o.toString()); else ed.remove(PREF_SUM_PENDING);   // 헤드유닛 안내를 켜 둔 때만 "안 읽은 요약"을 남긴다
+            ed.apply();
+            lastSummaryJson = o;
+            log("센트리 가동 요약 — " + durMin + "분 가동, 녹화 " + count + "건" + (settings.notify ? "" : "(알림 설정이 꺼져 있어 푸시는 보내지 않음)"));
+            if (settings.notify) host.postCarEvent(summaryEvent(count, durMin));
+            publishStatus();
+        } catch (Throwable t) {
+            log("센트리 가동 요약 실패 — " + t);
+        }
+    }
+
+    private volatile JSONObject lastSummaryJson;
+
+    /** 폰 앱 센트리 설정의 "시동 켤 때 헤드유닛 가동 요약 안내(음성 읽기+화면 문구)" 켜짐 여부 — 릴레이 앱이 읽는다. 설정이 아직 없으면 기본(켜짐). */
+    public boolean summaryAnnounce() { SentrySettings st = settings; return st == null || st.summaryAnnounce; }
+
+    /** 릴레이 앱 음성 안내용 — 아직 안 읽은 가동 요약 {startMs,endMs,count}을 한 번만 돌려주고 비운다. 없으면 null. */
+    public JSONObject takePendingSummary() {
+        try {
+            SharedPreferences p = host.prefs();
+            String s = p.getString(PREF_SUM_PENDING, "");
+            if (s == null || s.isEmpty()) return null;
+            p.edit().remove(PREF_SUM_PENDING).apply();
+            return new JSONObject(s);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     // 호스트 카메라 세션 종료(실시간 보기·다른 감지 시작 등)
@@ -486,6 +562,18 @@ public final class SentryManager {
                 o.put("storageKind", st.selectedKind());
             }
             o.put("usedMb", usedMbCache);
+            o.put("rev", SentryIndex.rev());   // 목록 변경 번호 — 앱은 같은 값이면 캐시한 목록을 그대로 쓴다
+            o.put("spaceState", spaceStateName(spaceLevelCache));   // ok|warn|critical|full — when_full=stop일 때만 ok가 아닐 수 있음. 앱이 열릴 때 팝업 판단용
+            o.put("spacePct", spacePctCache);
+            o.put("whenFull", settings.whenFull);
+            JSONObject ls = lastSummaryJson;
+            if (ls == null) {   // 릴레이가 재시작된 뒤에도 마지막 요약을 보여 준다
+                try {
+                    String sv = host.prefs().getString("sentry_sum_last", "");
+                    if (sv != null && !sv.isEmpty()) { ls = new JSONObject(sv); lastSummaryJson = ls; }
+                } catch (Throwable ignored) {}
+            }
+            if (ls != null) o.put("lastSession", ls);   // 가장 최근 가동 요약 {startMs,endMs,count} — 앱이 푸시와 같은 문구를 만들 때 정확한 시각으로 쓴다
             o.put("events", eventsCache);
             o.put("lastEvent", lastEvent);
             o.put("err", err);
@@ -603,6 +691,7 @@ public final class SentryManager {
                 int dirs;
                 try {
                     dirs = SentryIndex.clearRoots(roots);
+                    SentryIndex.bumpRev();
                     log("녹화 전체 삭제 완료 — 월 폴더 " + dirs + "개");
                 } catch (Throwable t) {
                     log("녹화 전체 삭제 오류 — " + t);
@@ -918,9 +1007,11 @@ public final class SentryManager {
         if (clearing.get()) return "전체 삭제 중";
         SentryHost hs = host;
         SentrySettings s = settings;
-        return gate(s.enabled, hs.ignitionState(), hs.camOff(), hs.rtcActive(), hs.detectActive(),
+        String g = gate(s.enabled, hs.ignitionState(), hs.camOff(), hs.rtcActive(), hs.detectActive(),
                 s.timeAllows(System.currentTimeMillis()), pausedLoc, hs.lowVoltage(),
                 s.pauseWhenPhoneNear, hs.phoneNearFresh(), "internal".equals(s.storage) ? null : storageYield);
+        if (g == null && s.whenFullStop() && spaceLevelCache >= 3) return "저장 공간 가득 — 녹화 중지";   // 지우지 않기를 골랐으니 영상을 지우거나 한도를 늘릴 때까지 쉰다(그때 자동 재개)
+        return g;
     }
 
     // afterDelay=true면 시동 OFF 20초 대기 규칙을 이미 지난 것으로 본다
@@ -1111,6 +1202,7 @@ public final class SentryManager {
         state = to;
         why = w;
         if (changed) { log("센트리 상태 " + from + "→" + to + " — " + w); trace(from.name() + "→" + to.name() + " " + w); }
+        if (to == State.ARMED) noteSessionStart();
         if (to == State.ARMED || to == State.RECORDING) setActive(true);
         else if (to == State.IDLE) setActive(false);
         if (changed) publishStatus();
@@ -1197,6 +1289,51 @@ public final class SentryManager {
             usedMbCache = storage.usedAllMb();   // 폴백 때 다른 단계에 남은 영상까지
             eventsCache = index.allOldestFirst().size();
         } catch (Throwable t) { log("용량 집계 실패 — " + t); }
+        try { updateSpace(); } catch (Throwable t) { log("저장 공간 점검 실패 — " + t); }
+    }
+
+    // 저장 공간 단계 — 0 여유 · 1 80%↑ · 2 95%↑ · 3 가득(한도 도달, 또는 기기 여유가 500MB 미만). 순수 계산이라 JVM에서 시험한다.
+    static int spaceLevel(long usedMb, long limitMb, long freeMb) {
+        if ((limitMb > 0 && usedMb >= limitMb) || freeMb < SPACE_MIN_FREE_MB) return 3;
+        if (limitMb <= 0) return 0;
+        if (usedMb * 100 >= limitMb * SPACE_CRIT_PCT) return 2;
+        if (usedMb * 100 >= limitMb * SPACE_WARN_PCT) return 1;
+        return 0;
+    }
+
+    static int spacePct(long usedMb, long limitMb) {
+        return limitMb <= 0 ? 0 : (int) Math.min(100L, usedMb * 100L / limitMb);
+    }
+
+    static String spaceStateName(int level) {
+        return level >= 3 ? "full" : level == 2 ? "critical" : level == 1 ? "warn" : "ok";
+    }
+
+    // io 스레드. "지우지 않고 녹화 중지"를 골랐을 때만 단계를 올리고 알림을 보낸다("자동 삭제"는 가득 차도 오래된 것부터 지우므로 해당 없음)
+    private void updateSpace() {
+        SentrySettings s = settings;
+        SentryStorage st = storage;
+        if (s == null || st == null) return;
+        long limit = st.limitMb();
+        long used = usedMbCache;
+        int pct = spacePct(used, limit);
+        spacePctCache = pct;
+        if (!s.whenFullStop()) { spaceLevelCache = 0; return; }
+        int level = spaceLevel(used, limit, st.freeMb(st.root()));
+        spaceLevelCache = level;
+        SentryHost hs = host;
+        if (hs == null) return;
+        if (spaceNotified < 0) spaceNotified = hs.prefs().getInt("sentry_space_notified", 0);
+        if (level > spaceNotified) {
+            spaceNotified = level;
+            hs.prefs().edit().putInt("sentry_space_notified", level).apply();
+            int shown = level >= 3 ? 100 : level == 2 ? SPACE_CRIT_PCT : SPACE_WARN_PCT;
+            log("저장 공간 " + shown + "% — 알림" + (s.notify ? "" : "(알림 설정이 꺼져 있어 보내지 않음)") + " · 사용 " + used + "MB / 한도 " + limit + "MB");
+            if (s.notify) hs.postCarEvent("sspace:" + shown);
+        } else if (spaceNotified > 0 && pct < 70) {   // 영상을 지워 70% 밑으로 내려가면 다음 80%·95%·가득 때 다시 알린다
+            spaceNotified = 0;
+            hs.prefs().edit().putInt("sentry_space_notified", 0).apply();
+        }
     }
 
     private void afterEvent() {
@@ -1204,11 +1341,12 @@ public final class SentryManager {
         final SentryIndex idxA = index;
         ioPost(() -> {
             try {
-                int n = stA.prune(idxA);
+                int n = settings.whenFullStop() ? 0 : stA.prune(idxA);   // 지우지 않기를 골랐으면 절대 자동으로 지우지 않는다
                 if (n > 0) log("용량 한도 초과 — 오래된 이벤트 " + n + "개 삭제");
             } catch (Throwable t) { log("용량 정리 실패 — " + t); }
             refreshStats();
             publishStatusNow();
+            if (settings.whenFullStop() && spaceLevelCache >= 3) post(() -> evaluate(false));   // 방금 가득 찼으면 바로 쉰다(카메라·CPU 반납)
         });
     }
 
@@ -1231,6 +1369,8 @@ public final class SentryManager {
             o.put("tier", st.tier());
             o.put("usedMb", usedMbCache);
             o.put("limitMb", st.limitMb());
+            o.put("spaceState", spaceStateName(spaceLevelCache));
+            o.put("spacePct", spacePctCache);
             o.put("events", eventsCache);
             o.put("lastEvent", lastEvent);
             o.put("fallback", st.fallback());
@@ -1495,6 +1635,7 @@ public final class SentryManager {
         try {
             PreRollEncoder e = encoder;
             if (state != State.ARMED || e == null) return;
+            if (settings.whenFullStop() && spaceLevelCache >= 3) return;   // 가득 찼으면 새 이벤트를 시작하지 않는다(곧 evaluate가 세션을 쉬게 함)
             final boolean fPerson = settings.filterPerson && settings.personOn(), fVehicle = settings.filterVehicle && settings.vehicleOn();   // 끈 종류는 거르기에서도 뺀다
             if (fPerson || fVehicle) {
                 byte[] det = frame;

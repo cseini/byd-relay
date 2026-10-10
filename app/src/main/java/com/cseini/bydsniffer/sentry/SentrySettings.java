@@ -26,7 +26,7 @@ public final class SentrySettings {
             "time_limit_enabled", "time_mode", "time_from", "time_to",
             "safe_location_enabled", "hazard_on_motion", "screen_message",
             "sensitivity", "min_detect_s", "roi_enabled", "rois", "layout_map", "layout_flip",
-            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
+            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "when_full", "summary_announce", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
 
     private static final String[] STORAGES = {"internal", "sd", "usb"};
     private static final String[] RESOLUTIONS = {"hd", "fhd", "original"};
@@ -34,6 +34,7 @@ public final class SentrySettings {
     private static final String[] LAYOUTS = {"quad"};
     private static final String[] OSD_POS = {"top_left", "top_center", "top_right", "bottom_left", "bottom_center", "bottom_right"};
     private static final String[] TIME_MODES = {"deny", "allow"};
+    private static final String[] WHEN_FULL = {"overwrite", "stop"};
     private static final String[] FPS_MODES = {"low", "reduced", "normal"};
     private static final String[] CODECS = {"h264", "h265"};
     private static final Pattern HM = Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)$");
@@ -54,6 +55,8 @@ public final class SentrySettings {
     public final String osdPos;
     public final boolean filterPerson;    // 움직임 감지 모드에서 "사람"이 있을 때만 이벤트·알림(기본 꺼짐, YOLO11n — 10-07 되살림)
     public final boolean filterVehicle;
+    public final boolean summaryAnnounce; // 시동을 켤 때 릴레이 앱(헤드유닛)이 센트리 가동 요약을 음성 읽기+화면 문구로 안내(기본 켜짐) — 운영자 10-10 "음성 설정은 폰 앱 센트리 설정에, 기본 켜짐"
+    public final String whenFull;         // 저장 공간이 가득 차면: overwrite(가장 오래된 것부터 자동 삭제, 기본) | stop(지우지 않고 녹화 중지 + 가득 차 가면 알림) — 운영자 10-10
     public final boolean objectDetect;    // 객체 인식(YOLO) 사용 — 끄면 YOLO를 아예 안 돌리고 예전처럼 움직임만으로 이벤트·알림(운영자 10-10, 앱 센트리 설정에서 사용자가 고름)
     public final boolean detectPerson;    // 판정 결과에서 사람을 남김
     public final boolean detectVehicle;   // 판정 결과에서 차량을 남김   // "차량(자동차·오토바이·자전거·버스·트럭)"이 있을 때만. 둘 다 켜면 어느 쪽이든, 둘 다 꺼짐이면 거르지 않음
@@ -98,6 +101,8 @@ public final class SentrySettings {
         cellViews = internalOnly ? new JSONObject() : normalizeCellViews(o.opt("cell_views"));   // 씨라7 시험판: 어안 보정표는 돌핀 렌즈 기준이라 쓰지 않는다
         filterPerson = bool(o, "filter_person", false);
         filterVehicle = bool(o, "filter_vehicle", false);
+        whenFull = pick(o, "when_full", "overwrite", WHEN_FULL);
+        summaryAnnounce = bool(o, "summary_announce", true);
         objectDetect = bool(o, "object_detect", true);
         detectPerson = bool(o, "detect_person", true);
         detectVehicle = bool(o, "detect_vehicle", true);
@@ -197,6 +202,8 @@ public final class SentrySettings {
             o.put("cell_views", cellViews);
             o.put("filter_person", filterPerson);
             o.put("filter_vehicle", filterVehicle);
+            o.put("when_full", whenFull);
+            o.put("summary_announce", summaryAnnounce);
             o.put("object_detect", objectDetect);
             o.put("detect_person", detectPerson);
             o.put("detect_vehicle", detectVehicle);
@@ -289,6 +296,7 @@ public final class SentrySettings {
 
     // 객체 인식 실제 사용 여부 — object_detect가 꺼졌거나 사람·차량이 둘 다 꺼졌으면 YOLO를 돌리지 않는다
     public boolean objectsOn() { return objectDetect && (detectPerson || detectVehicle); }
+    public boolean whenFullStop() { return "stop".equals(whenFull); }
     public boolean personOn() { return objectsOn() && detectPerson; }
     public boolean vehicleOn() { return objectsOn() && detectVehicle; }
     // 조명 의심 판단은 "사람·차량이 새로 없다"에 기대므로 두 종류를 다 볼 때만 믿는다(한쪽만 보면 차가 지나가도 '없음'이라 조명으로 오판)

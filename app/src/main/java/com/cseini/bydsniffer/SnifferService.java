@@ -206,6 +206,52 @@ public class SnifferService extends Service {
     private volatile int lastAccValue = Integer.MIN_VALUE;
     private volatile boolean accActive = false;
 
+    // ★864 센트리 가동 요약(운영자 10-10, 계약서 7.31) — 시동을 켜면 지난 주차 동안 녹화가 1건 이상일 때만 알림음 → 음성 "주차 중 센트리 녹화 열두 건이 있습니다" + 같은 문구 화면 표시.
+    //   켜고 끄기는 폰 앱 센트리 설정(summary_announce, 기본 켜짐). 요약은 SentryManager.takePendingSummary()가 한 번만 준다(시동 켠 4초 뒤 생기고 릴레이 재시작에도 남음).
+    private void announceSentrySummary() {
+        try {
+            if (!sentryEnabled() || !SentryManager.get().summaryAnnounce()) return;
+            org.json.JSONObject s = SentryManager.get().takePendingSummary();
+            int count = s == null ? 0 : s.optInt("count", 0);
+            if (count <= 0) return;
+            String msg = com.cseini.bydsniffer.sentry.SentryVoice.line(count);
+            playIccSound(9, 0.8f);   // se_chime
+            android.widget.Toast.makeText(getApplicationContext(), msg, android.widget.Toast.LENGTH_LONG).show();
+            java.util.List<String> ids = com.cseini.bydsniffer.sentry.SentryVoice.clipIds(count);
+            mainHandler.postDelayed(() -> playSentryVoice(ids), iccSoundMs[9] > 0 ? iccSoundMs[9] + 200 : 1200);
+            postToD1("SENTRY", "가동 요약 안내 — " + msg + " · 조각 " + ids);
+        } catch (Throwable t) { postToD1("SENTRY", "가동 요약 안내 실패 " + t.getClass().getSimpleName()); }
+    }
+    // 음성 조각(assets/sentry_voice/<id>.wav, 16kHz·모노·16bit, 44바이트 헤더)을 PCM으로 이어 붙여 AudioTrack 한 번으로 재생 — 조각마다 따로 틀면 사이가 끊긴다.
+    //   효과음과 같은 채널(사용자가 고른 알림음 채널)·같은 덕킹 규칙을 따른다.
+    private void playSentryVoice(java.util.List<String> ids) {
+        new Thread(() -> {
+            android.media.AudioTrack t = null;
+            try {
+                java.io.ByteArrayOutputStream pcm = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                for (String id : ids) {
+                    java.io.ByteArrayOutputStream one = new java.io.ByteArrayOutputStream();
+                    try (java.io.InputStream in = getAssets().open("sentry_voice/" + id + ".wav")) { int n; while ((n = in.read(buf)) > 0) one.write(buf, 0, n); }
+                    byte[] w = one.toByteArray();
+                    if (w.length > 44) pcm.write(w, 44, w.length - 44);
+                }
+                byte[] b = pcm.toByteArray();
+                if (b.length == 0) return;
+                long ms = b.length / 32L;   // 16000Hz × 2바이트
+                int usage = CH_USAGE[chIdx(KEY_ICC_CHANNEL)];
+                duckMediaBriefly(usage, ms + 400);
+                t = new android.media.AudioTrack.Builder()
+                        .setAudioAttributes(new android.media.AudioAttributes.Builder().setUsage(usage).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                        .setAudioFormat(new android.media.AudioFormat.Builder().setSampleRate(16000).setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT).build())
+                        .setTransferMode(android.media.AudioTrack.MODE_STATIC).setBufferSizeInBytes(b.length).build();
+                t.write(b, 0, b.length);
+                t.play();
+                Thread.sleep(ms + 300);
+            } catch (Throwable e) { postToD1("SENTRY", "가동 요약 음성 실패 " + e.getClass().getSimpleName() + ":" + e.getMessage()); }
+            finally { if (t != null) try { t.release(); } catch (Throwable ignore) {} }
+        }, "sentry-voice").start();
+    }
     public String sentrySelfGrant() { RelayClient rc = relay; return rc != null ? rc.selfSentryGrantQuery() : null; }   // ★녹화 보기 화면이 공유판에서도 열리게
     public boolean sentryEnabled() { try { return com.cseini.bydsniffer.sentry.SentryManager.get().enabled(); } catch (Throwable t) { return false; } }   // ★메인 화면 센트리 칸(켠 차만)
     public static SnifferService getInstance() {
@@ -2267,6 +2313,7 @@ public class SnifferService extends Service {
                 if (dualFails > 0) { postToD1("CLUSTER", "새 주행 — 지난 주행의 카메라 동시 운용 실패 " + dualFails + "번 지움(다시 같이 씀)"); dualFails = 0; if (relay != null) relay.putStatus("cam_dual", "ok"); }   // ★784
                 if (prefs != null && prefs.contains("cam_dual_fail")) prefs.edit().remove("cam_dual_fail").apply();   // ★784 예전 영구 기록 정리(이제 안 읽음)
                 new Thread(clusterCam::keepTick, "keep-ign-on").start();   // ★729 시동 켜자마자 보조 카메라 열기(출발 직후 후진 대비)
+                mainHandler.postDelayed(this::announceSentrySummary, 15000);   // ★864 센트리 가동 요약 — 헤드유닛이 다 뜬 뒤 알림음+문구(계약서 7.31)
             };
             btAudioInit();   // ★715 A2DP 싱크·HFP 프록시와 연결 상태 리시버(프로세스당 1회)
             registerAutotripStateReceiver();   // ★710/713 오토전비 적용 상태 → relay_state.autotrip_hud
@@ -8414,14 +8461,16 @@ public class SnifferService extends Service {
                     if (Math.abs(actual - want) <= 3) { gap = false; continue; }
                     // ★724 사건 순서로 가른다 — 분할이 사라졌다(다른 화면·후진) 5:5로 다시 나타나면 차가 초기화한 것 → 복원.
                     //   분할이 계속 떠 있는 채로 바뀐 비율(5:5 포함)은 운전자가 직접 바꾼 것 → 새 비율 기억, 되돌리지 않음.
-                    if (gap && Math.abs(actual - 50) <= 3) {
+                    // ★864 비율 맞추기가 실패해 남은 5:5도 운전자가 바꾼 게 아니다 — 두 번까지 다시 맞춘다(운영자 10-10 "3:7로 해도 5:5")
+                    boolean failedApply = SplitLauncher.ratioFails > 0 && SplitLauncher.ratioFails < 3;
+                    if ((gap || failedApply) && Math.abs(actual - 50) <= 3) {
                         long now = System.currentTimeMillis();
                         if (now - lastFix < 5000) continue;
                         lastFix = now;
                         StringBuilder lg = new StringBuilder();
                         String r = SplitLauncher.applyRatio(this, want, lg);
                         if (!r.endsWith("✓")) gap = false;   // 못 맞추면 더 다투지 않는다
-                        postToD1("SPLIT", "분할 비율 복원 " + actual + "% → " + want + "% (다른 화면 다녀온 뒤 5:5로 초기화됨) → " + r);
+                        postToD1("SPLIT", "분할 비율 복원 " + actual + "% → " + want + "% (" + (gap ? "다른 화면 다녀온 뒤 5:5로 초기화됨" : "앞서 비율 맞추기 실패") + ") → " + r);
                     } else {
                         gap = false;
                         SplitLauncher.lastPct = actual; saveSplitPrefs();

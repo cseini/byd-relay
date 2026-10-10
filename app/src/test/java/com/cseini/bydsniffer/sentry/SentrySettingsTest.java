@@ -571,4 +571,26 @@ public class SentrySettingsTest {
         JSONObject j = nc.toJson();
         assertTrue(j.getBoolean("object_detect") && j.getBoolean("detect_person") && !j.getBoolean("detect_vehicle"));
     }
+
+    @Test
+    public void whenFull_defaultsToOverwriteAndAcceptsStop() throws JSONException {
+        SentrySettings d = SentrySettings.fromJson(new JSONObject());
+        assertEquals("overwrite", d.whenFull);
+        assertFalse(d.whenFullStop());
+        JSONObject stop = new JSONObject(); stop.put("when_full", "stop");
+        SentrySettings st = SentrySettings.fromJson(stop);
+        assertTrue(st.whenFullStop());
+        assertEquals("stop", st.toJson().getString("when_full"));
+        JSONObject bad = new JSONObject(); bad.put("when_full", "delete_all");
+        assertEquals("overwrite", SentrySettings.fromJson(bad).whenFull);   // 모르는 값은 기본(자동 삭제)
+    }
+
+    @Test
+    public void summaryAnnounce_defaultsOnAndRoundTrips() throws JSONException {
+        assertTrue(SentrySettings.fromJson(new JSONObject()).summaryAnnounce);
+        JSONObject off = new JSONObject(); off.put("summary_announce", false);
+        SentrySettings s = SentrySettings.fromJson(off);
+        assertFalse(s.summaryAnnounce);
+        assertFalse(s.toJson().getBoolean("summary_announce"));
+    }
 }

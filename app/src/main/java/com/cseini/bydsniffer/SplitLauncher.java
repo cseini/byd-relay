@@ -26,6 +26,7 @@ final class SplitLauncher {
 
     // 마지막 분할(비율 변경·후진 후 복원용)
     static volatile String lastPkg1, lastPkg2; static volatile int lastPct = 50;
+    static volatile int ratioFails = 0;   // ★864 마지막 비율 맞추기가 연달아 실패한 횟수(성공하면 0) — 비율 감시가 실패로 남은 5:5를 운전자 선택으로 오인하지 않게
 
     static final class Res { final boolean ok; final int exit; final String out;
         Res(boolean ok, int exit, String out) { this.ok = ok; this.exit = exit; this.out = out == null ? "" : out; } }
@@ -212,8 +213,16 @@ final class SplitLauncher {
     // ── 비율 ─────────────────────────────────────────────────────────
     static String applyRatio(Context ctx, int pct, StringBuilder log) {
         pct = Math.max(20, Math.min(80, pct));
-        int[][] pair = splitBounds(ctx);   // [primary{l,t,r,b}, secondary{...}] or null
-        if (pair == null) return "분할 경계 없음(분할 상태 아님)";
+        // ★864 운영자 10-10 "3:7로 해도 5:5" — 부앱이 막 들어온 직후엔 분할 창이 아직 움직이는 중이라(주·부 경계가 겹침, 실차 p=[58,0,1011,1080] s=[967,0,1920,1080])
+        //   resize-docked-stack이 실패했다. 경계가 두 번 연속 같고 겹치지 않을 때까지 최대 3초 기다린다.
+        int[][] pair = null, prev = null;
+        for (int i = 0; i < 12; i++) {
+            pair = splitBounds(ctx);   // [primary{l,t,r,b}, secondary{...}] or null
+            if (pair != null && prev != null && java.util.Arrays.deepEquals(pair, prev) && !overlapping(pair)) break;
+            prev = pair;
+            sleep(250);
+        }
+        if (pair == null) { ratioFails++; return "분할 경계 없음(분할 상태 아님)"; }
         int[] p = pair[0], s = pair[1]; int[] target; String axis;
         if (p[0] == s[0] && p[2] == s[2] && p[3] <= s[1]) {          // 상하
             int div = s[1] - p[3]; axis = "Y";
@@ -221,14 +230,28 @@ final class SplitLauncher {
         } else if (p[1] == s[1] && p[3] == s[3] && p[2] <= s[0]) {   // 좌우
             int div = s[0] - p[2]; axis = "X";
             target = new int[]{p[0], p[1], p[0] + Math.round(((s[2] - p[0]) - div) * (pct / 100f)), p[3]};
-        } else return "지원 안 하는 경계 p=" + java.util.Arrays.toString(p) + " s=" + java.util.Arrays.toString(s);
+        } else { ratioFails++; return "지원 안 하는 경계 p=" + java.util.Arrays.toString(p) + " s=" + java.util.Arrays.toString(s); }
         String rect = target[0] + " " + target[1] + " " + target[2] + " " + target[3];
-        boolean ok = cmd(ctx, "am stack resize-docked-stack " + rect + " " + rect, log);
-        if (!ok) return "resize 실패 axis=" + axis;
+        Res rr = null;
+        for (int i = 0; i < 3; i++) {   // 그래도 거절되면 0.5초 간격으로 두 번 더
+            if (i > 0) sleep(500);
+            rr = adb(ctx, "am stack resize-docked-stack " + rect + " " + rect);
+            log.append("$ am stack resize-docked-stack ").append(rect).append(" → exit=").append(rr.exit).append(' ').append(one(rr.out)).append('\n');
+            if (rr.ok) break;
+        }
+        if (!rr.ok) { ratioFails++; return "resize 실패 axis=" + axis + " exit=" + rr.exit + " " + one(rr.out); }
         sleep(400);
         int actual = actualPercent(ctx);
         lastPct = pct;
-        return "비율 " + pct + "% axis=" + axis + " 실측=" + actual + "%" + (actual >= 0 && Math.abs(actual - pct) <= 3 ? " ✓" : " ⚠");
+        boolean hit = actual >= 0 && Math.abs(actual - pct) <= 3;
+        ratioFails = hit ? 0 : ratioFails + 1;
+        return "비율 " + pct + "% axis=" + axis + " 실측=" + actual + "%" + (hit ? " ✓" : " ⚠");
+    }
+
+    // 주·부 창이 아직 겹친다 = 분할 애니메이션 중
+    private static boolean overlapping(int[][] pair) {
+        int[] p = pair[0], s = pair[1];
+        return p[2] > s[0] && p[0] < s[2] && p[3] > s[1] && p[1] < s[3];
     }
 
     static int actualPercent(Context ctx) {
