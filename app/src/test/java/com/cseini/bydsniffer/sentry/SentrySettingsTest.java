@@ -513,4 +513,62 @@ public class SentrySettingsTest {
         assertEquals(1000, clamped);  // 최소 1000
     }
 
+
+    @Test
+    public void internalOnly_forcesInternalStorageWhateverIsSent() throws JSONException {
+        JSONObject sd = new JSONObject(); sd.put("storage", "sd");
+        assertEquals("sd", SentrySettings.fromJson(sd).storage);
+        SentrySettings.setInternalOnly(true);
+        try {
+            assertEquals("internal", SentrySettings.fromJson(sd).storage);
+            JSONObject usb = new JSONObject(); usb.put("storage", "usb");
+            assertEquals("internal", SentrySettings.fromJson(usb).storage);
+        } finally {
+            SentrySettings.setInternalOnly(false);
+        }
+        assertEquals("sd", SentrySettings.fromJson(sd).storage);
+    }
+
+    @Test
+    public void internalOnly_clampsEncoderLoadAndIgnoresDewarpTables() throws JSONException {
+        JSONObject heavy = new JSONObject();
+        heavy.put("resolution", "original"); heavy.put("fps", "normal"); heavy.put("bitrate_kbps", 8000);
+        heavy.put("cell_views", new JSONObject("{\"1\":{\"x\":1}}"));
+        SentrySettings.setInternalOnly(true);
+        try {
+            SentrySettings s = SentrySettings.fromJson(heavy);
+            assertEquals("hd", s.resolution);
+            assertEquals("reduced", s.fps);
+            assertEquals(2000, s.bitrateKbps);
+            assertEquals(0, s.cellViews.length());
+            assertEquals("reduced", SentrySettings.fromJson(new JSONObject()).fps);   // 기본도 10fps
+            JSONObject low = new JSONObject(); low.put("fps", "low");
+            assertEquals("low", SentrySettings.fromJson(low).fps);
+        } finally {
+            SentrySettings.setInternalOnly(false);
+        }
+        SentrySettings d = SentrySettings.fromJson(heavy);
+        assertEquals("original", d.resolution);
+        assertEquals("normal", d.fps);
+        assertEquals(8000, d.bitrateKbps);
+    }
+
+    @Test
+    public void objectToggles_defaultOnAndCombine() throws JSONException {
+        SentrySettings d = SentrySettings.fromJson(new JSONObject());
+        assertTrue(d.objectDetect && d.detectPerson && d.detectVehicle);
+        assertTrue(d.objectsOn() && d.personOn() && d.vehicleOn() && d.lightJudgeOn());
+        JSONObject off = new JSONObject(); off.put("object_detect", false);
+        SentrySettings so = SentrySettings.fromJson(off);
+        assertFalse(so.objectsOn() || so.personOn() || so.vehicleOn() || so.lightJudgeOn());
+        JSONObject noCar = new JSONObject(); noCar.put("detect_vehicle", false);
+        SentrySettings nc = SentrySettings.fromJson(noCar);
+        assertTrue(nc.objectsOn() && nc.personOn() && !nc.vehicleOn());
+        assertFalse("한쪽만 보면 조명 의심을 믿지 않는다", nc.lightJudgeOn());
+        JSONObject none = new JSONObject(); none.put("detect_person", false); none.put("detect_vehicle", false);
+        assertFalse("둘 다 끄면 object_detect 끔과 같다", SentrySettings.fromJson(none).objectsOn());
+        // 설정 JSON에 실려 나간다
+        JSONObject j = nc.toJson();
+        assertTrue(j.getBoolean("object_detect") && j.getBoolean("detect_person") && !j.getBoolean("detect_vehicle"));
+    }
 }

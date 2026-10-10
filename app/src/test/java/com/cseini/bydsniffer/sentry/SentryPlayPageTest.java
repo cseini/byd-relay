@@ -96,4 +96,19 @@ public class SentryPlayPageTest {
         assertTrue(h.contains("date=2026-10-03&sg=abc'"));
         assertTrue(h.contains("date=2026-09-01&sg=abc'"));
     }
+
+    @Test
+    public void pagesShowSourceRepositoryNotice() {
+        // AGPL §13 — 웹 화면 어디서든 소스 저장소 주소가 보여야 한다
+        String web = SentryPlayPage.buildWebPage("2026-10-10", java.util.Collections.<SentryIndex.EventMeta>emptyList(), "");
+        assertTrue(web.contains("https://github.com/cseini/byd-relay") && web.contains("AGPL-3.0"));
+        SentryIndex.EventMeta m = new SentryIndex.EventMeta();
+        m.id = "2026-10-10_13h59m55s";
+        m.durationS = 10;
+        SentryIndex.Segment sg = new SentryIndex.Segment();
+        sg.n = 0; sg.bytes = 1; sg.durationS = 10;
+        m.segments.add(sg);
+        assertTrue(SentryPlayPage.buildPlayPage(m, false, "").contains("https://github.com/cseini/byd-relay"));
+        assertTrue(SentryReplayPage.build(null, null, null, "").contains("https://github.com/cseini/byd-relay"));
+    }
 }

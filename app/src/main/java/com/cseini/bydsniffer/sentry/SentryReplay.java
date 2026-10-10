@@ -386,7 +386,8 @@ public final class SentryReplay {
             if (dc == null || db == null) return null;
             SentryObjects.Found f = SentryObjects.pick(SentryObjects.newOnly(dc, db, cell));
             if (f == null) {
-                lightOut[0] = SentryObjects.lightStep(SentryObjects.cellMeanY(cur, w, rx, ry, cw, ch), SentryObjects.cellMeanY(base, w, rx, ry, cw, ch));
+                lightOut[0] = SentryObjects.lightStep(SentryObjects.cellMeanY(cur, w, rx, ry, cw, ch), SentryObjects.cellMeanY(base, w, rx, ry, cw, ch))
+                        && !SentryObjects.headlightLike(SentryObjects.newSaturated(cur, base, w, rx, ry, cw, ch));   // 멀리서 켜진 헤드라이트는 조명 의심이 아니다(실시간과 같게)
                 return null;
             }
             JSONObject o = new JSONObject();

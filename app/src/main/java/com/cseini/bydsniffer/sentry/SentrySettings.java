@@ -26,7 +26,7 @@ public final class SentrySettings {
             "time_limit_enabled", "time_mode", "time_from", "time_to",
             "safe_location_enabled", "hazard_on_motion", "screen_message",
             "sensitivity", "min_detect_s", "roi_enabled", "rois", "layout_map", "layout_flip",
-            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
+            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
 
     private static final String[] STORAGES = {"internal", "sd", "usb"};
     private static final String[] RESOLUTIONS = {"hd", "fhd", "original"};
@@ -40,6 +40,10 @@ public final class SentrySettings {
 
     public final boolean enabled;
     public final boolean motionOnly;
+    // 씨라7(DiLink5) 시험판은 차량 내장 저장소만 쓴다(운영자 10-10 "차량내부저장장치만") — 앱이 어떤 값을 보내도 내장으로 고정. 릴레이 시작 때 SnifferService가 켠다.
+    private static volatile boolean internalOnly;
+    public static void setInternalOnly(boolean v) { internalOnly = v; }
+    public static boolean isInternalOnly() { return internalOnly; }
     public final String storage;
     public final int limitMb;
     public final String resolution;
@@ -49,7 +53,10 @@ public final class SentrySettings {
     public final boolean osdBattery;
     public final String osdPos;
     public final boolean filterPerson;    // 움직임 감지 모드에서 "사람"이 있을 때만 이벤트·알림(기본 꺼짐, YOLO11n — 10-07 되살림)
-    public final boolean filterVehicle;   // "차량(자동차·오토바이·자전거·버스·트럭)"이 있을 때만. 둘 다 켜면 어느 쪽이든, 둘 다 꺼짐이면 거르지 않음
+    public final boolean filterVehicle;
+    public final boolean objectDetect;    // 객체 인식(YOLO) 사용 — 끄면 YOLO를 아예 안 돌리고 예전처럼 움직임만으로 이벤트·알림(운영자 10-10, 앱 센트리 설정에서 사용자가 고름)
+    public final boolean detectPerson;    // 판정 결과에서 사람을 남김
+    public final boolean detectVehicle;   // 판정 결과에서 차량을 남김   // "차량(자동차·오토바이·자전거·버스·트럭)"이 있을 때만. 둘 다 켜면 어느 쪽이든, 둘 다 꺼짐이면 거르지 않음
     public final JSONObject cellViews;   // 칸별 어안 보정·화면 조정(10-07) — {"1":{…},"3":{…}} 칸 1~4(행 우선 1좌상·2우상·3좌하·4우하) → 카메라 보조 조정과 같은 형식. 없는 칸은 원본 그대로, 비면 보정 없음(비용 0)
     public final boolean notify;
     public final boolean timeLimitEnabled;
@@ -79,18 +86,21 @@ public final class SentrySettings {
     private SentrySettings(JSONObject o) {
         enabled = bool(o, "enabled", false);
         motionOnly = bool(o, "motion_only", false);
-        storage = pick(o, "storage", "internal", STORAGES);
+        storage = internalOnly ? "internal" : pick(o, "storage", "internal", STORAGES);
         int lim = num(o, "limit_mb", 0, 0, Integer.MAX_VALUE);
         limitMb = (lim > 0 && lim < 1000) ? 1000 : lim;
-        resolution = pick(o, "resolution", "original", RESOLUTIONS);
+        resolution = internalOnly ? "hd" : pick(o, "resolution", "original", RESOLUTIONS);   // 씨라7 시험판: 인코더 부하를 줄이려 HD 고정
         mode = pick(o, "mode", "off", MODES);
         layout = pick(o, "layout", "quad", LAYOUTS);
         osdDatetime = bool(o, "osd_datetime", true);
         osdBattery = bool(o, "osd_battery", true);
         osdPos = normalizeOsdPos(o.opt("osd_pos"));
-        cellViews = normalizeCellViews(o.opt("cell_views"));
+        cellViews = internalOnly ? new JSONObject() : normalizeCellViews(o.opt("cell_views"));   // 씨라7 시험판: 어안 보정표는 돌핀 렌즈 기준이라 쓰지 않는다
         filterPerson = bool(o, "filter_person", false);
         filterVehicle = bool(o, "filter_vehicle", false);
+        objectDetect = bool(o, "object_detect", true);
+        detectPerson = bool(o, "detect_person", true);
+        detectVehicle = bool(o, "detect_vehicle", true);
         notify = bool(o, "notify", true);
         timeLimitEnabled = bool(o, "time_limit_enabled", false);
         timeMode = pick(o, "time_mode", "deny", TIME_MODES);
@@ -108,8 +118,10 @@ public final class SentrySettings {
         layoutFlip = SentryLayout.normalizeFlip(o.opt("layout_flip"));
         prerollS = num(o, "preroll_s", 10, 1, 20);
         postS = num(o, "post_s", 35, 1, 60);
-        fps = pick(o, "fps", "normal", FPS_MODES);
+        String fpsPick = pick(o, "fps", internalOnly ? "reduced" : "normal", FPS_MODES);
+        fps = internalOnly && "normal".equals(fpsPick) ? "reduced" : fpsPick;   // 씨라7 시험판: 최대 10fps
         int br = num(o, "bitrate_kbps", 0, 0, 8000);
+        if (internalOnly && br > 2000) br = 2000;   // 씨라7 시험판: 최대 2000kbps
         bitrateKbps = (br > 0 && br < 500) ? 500 : br;
         codec = pick(o, "codec", "h264", CODECS);
         shadowFilter = bool(o, "shadow_filter", true);
@@ -185,6 +197,9 @@ public final class SentrySettings {
             o.put("cell_views", cellViews);
             o.put("filter_person", filterPerson);
             o.put("filter_vehicle", filterVehicle);
+            o.put("object_detect", objectDetect);
+            o.put("detect_person", detectPerson);
+            o.put("detect_vehicle", detectVehicle);
             o.put("osd_datetime", osdDatetime);
             o.put("osd_battery", osdBattery);
             o.put("osd_pos", osdPos);
@@ -271,6 +286,13 @@ public final class SentrySettings {
         out.add(new Roi(0, new float[]{0f, 1f, 1f, 0f}, new float[]{0f, 0f, 1f, 1f}, minMotionPct(), sustainMs()));
         return out;
     }
+
+    // 객체 인식 실제 사용 여부 — object_detect가 꺼졌거나 사람·차량이 둘 다 꺼졌으면 YOLO를 돌리지 않는다
+    public boolean objectsOn() { return objectDetect && (detectPerson || detectVehicle); }
+    public boolean personOn() { return objectsOn() && detectPerson; }
+    public boolean vehicleOn() { return objectsOn() && detectVehicle; }
+    // 조명 의심 판단은 "사람·차량이 새로 없다"에 기대므로 두 종류를 다 볼 때만 믿는다(한쪽만 보면 차가 지나가도 '없음'이라 조명으로 오판)
+    public boolean lightJudgeOn() { return objectsOn() && detectPerson && detectVehicle; }
 
     public boolean hasUserRois() { return roiEnabled && rois.length() > 0; }
 

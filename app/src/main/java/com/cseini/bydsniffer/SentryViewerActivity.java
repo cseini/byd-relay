@@ -67,10 +67,13 @@ public class SentryViewerActivity extends Activity {
     // 릴레이 웹 서버가 8765→8766→8767 중 먼저 열린 포트를 쓰므로 /sentry/status가 답하는 포트를 찾는다
     private void findPortAndLoad() {
         new Thread(() -> {
+            SnifferService svc = SnifferService.getInstance();
+            String g = svc != null ? svc.sentrySelfGrant() : null;
+            final String q = g != null ? "?" + g : "";   // 공유판은 권한 값이 있어야 /sentry/*가 열린다(운영자판은 무시)
             int found = 0;
             for (int p : new int[]{8765, 8766, 8767}) {
                 try {
-                    HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + p + "/sentry/status").openConnection();
+                    HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + p + "/sentry/status" + q).openConnection();
                     c.setConnectTimeout(1500);
                     c.setReadTimeout(2500);
                     int code = c.getResponseCode();
@@ -86,7 +89,7 @@ public class SentryViewerActivity extends Activity {
                     return;
                 }
                 msg.setText("센트리 녹화");
-                web.loadUrl("http://127.0.0.1:" + port + "/sentry/web");
+                web.loadUrl("http://127.0.0.1:" + port + "/sentry/web" + q);
             });
         }, "sentry-viewer-port").start();
     }

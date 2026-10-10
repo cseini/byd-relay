@@ -1005,6 +1005,7 @@ public class RelayClient {
                 if ("/relay/poll".equals(path) && body.has("wait")) { lpAborted = false; lpConn = c; }
                 c.setDoOutput(true);
                 c.setRequestProperty("content-type", "application/json");
+                c.setRequestProperty("User-Agent", "LL");   // ★842 머리말 줄이기 — 안드로이드 기본 User-Agent(약 70자)가 폴링마다 실렸다
                 byte[] out = body.toString().getBytes("UTF-8");
                 // ★839 데이터절감 A — 서버가 gzip 허용(c&1)하면 큰 POST(/relay/poll 제외) 본문을 gzip으로 압축해 보냄. 깨진 gzip이면 서버가 400(bad gzip).
                 if ((serverCaps & 1) != 0 && "/relay/state".equals(path) && out.length > 500) {
@@ -1021,7 +1022,7 @@ public class RelayClient {
                     while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
                 }
                 done = true;
-                if ("/relay/poll".equals(path)) { duPollN.incrementAndGet(); duPollB.addAndGet(out.length + bo.size()); }
+                if ("/relay/poll".equals(path)) { duPollN.incrementAndGet(); duPollB.addAndGet(out.length + bo.size()); duPollH.addAndGet(hdrBytes(c, out.length)); }
                 else { duPostN.incrementAndGet(); duPostB.addAndGet(out.length + bo.size()); }
                 JSONObject res = new JSONObject(bo.toString("UTF-8"));
                 if ("/relay/poll".equals(path) || "/relay/state".equals(path)) serverCaps = res.optInt("c", 0);   // ★839 c는 poll·state 응답에만 붙음(event·result엔 없어 0으로 꺼지던 것 방지)
@@ -1058,7 +1059,25 @@ public class RelayClient {
     }
     // ★699 데이터 용도별 계측(관측 전용) — postJson 요청+응답 본문 바이트·횟수(폴링/그 외). SnifferService.sampleDataUsage가 60초마다 비우며 모바일일 때만 일 누적.
     static final java.util.concurrent.atomic.AtomicLong duPollN = new java.util.concurrent.atomic.AtomicLong(), duPollB = new java.util.concurrent.atomic.AtomicLong(),
-            duPostN = new java.util.concurrent.atomic.AtomicLong(), duPostB = new java.util.concurrent.atomic.AtomicLong();
+            duPostN = new java.util.concurrent.atomic.AtomicLong(), duPostB = new java.util.concurrent.atomic.AtomicLong(),
+            duPollH = new java.util.concurrent.atomic.AtomicLong();   // ★842 폴링 HTTP 헤더 바이트(씨라7 822와 같은 기준으로 전 판 계측)
+    // ★822/842 HTTP/1.1 헤더 바이트(폴링) — 응답은 받은 헤더 그대로(안드로이드 내부용 X-Android-* 가짜 헤더는 실제로 오가지 않아 뺌), 요청은 HttpURLConnection이 붙이는 줄로 계산.
+    //   실제 쓰인 프로토콜(X-Android-Selected-Protocol)을 처음 한 번 남긴다 — HTTP/2면 헤더가 압축돼 실제 바이트는 이보다 훨씬 작다.
+    static volatile String duProto = "";
+    private static long hdrBytes(HttpURLConnection c, int bodyLen) {
+        try {   // 계측 실패가 폴링 실패(postJson null)로 번지지 않게
+            long n = 2;
+            for (java.util.Map.Entry<String, java.util.List<String>> e : c.getHeaderFields().entrySet()) {
+                String k = e.getKey();
+                if (k != null && k.startsWith("X-Android-")) { if ("X-Android-Selected-Protocol".equals(k) && !e.getValue().isEmpty()) duProto = String.valueOf(e.getValue().get(0)); continue; }
+                for (String v : e.getValue()) n += (k == null ? 0 : k.length() + 2) + (v == null ? 0 : v.length()) + 2;
+            }
+            String ua = "LL";
+            n += ("POST " + c.getURL().getFile() + " HTTP/1.1\r\nHost: " + c.getURL().getHost() + "\r\nUser-Agent: " + ua + "\r\nConnection: Keep-Alive\r\nAccept-Encoding: gzip\r\n"
+                    + "content-type: application/json\r\nContent-Length: " + bodyLen + "\r\n\r\n").length();
+            return n;
+        } catch (Throwable t) { return 0; }
+    }
     // ★726 끊김 진단 — 마지막 성공 때의 두 시계, 그 뒤 전송 실패 횟수·마지막 사유·첫 실패 시각. 기록은 SnifferService가 넣는 netGapLog로(NETGAP).
     private static volatile long lastOkEl = 0, lastOkUp = 0, netFailFirstMs = 0;
     /** ★736 마지막 서버 성공이 몇 ms 전인가(없으면 -1) — 심박과 함께 저장해 다음 시작 때 '살아 있었는데 못 닿았나'를 가린다. */
@@ -1129,6 +1148,7 @@ public class RelayClient {
     }
 
     // ★센트리 접속 grant 검증(공유판 /sentry/*) — sg=HMAC(pairKey, "SENTRY|"+vin+"|"+sgx). 규칙은 sentry/SentryAuth(순수 로직, JUnit)
+    public String selfSentryGrantQuery() { return com.cseini.bydsniffer.sentry.SentryAuth.selfGrantQuery(pairKey, vin, System.currentTimeMillis()); }
     public boolean verifySentryGrant(String sgx, String sg) {
         String key = pairKey;
         if (key == null) { lastVerifyFail = "릴레이 미페어링"; return false; }

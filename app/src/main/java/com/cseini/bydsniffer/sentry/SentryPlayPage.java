@@ -112,7 +112,7 @@ final class SentryPlayPage {
             + "<div id='msg' class='msg'></div>"
             + "<div class='info'>__SEGS__<div class='path'>__PATH__</div></div>"
             + "<button id='bd' class='del'>삭제</button>"
-            + "</div><script>__JS__</script></body></html>";
+            + SentrySource.NOTE + "</div><script>__JS__</script></body></html>";
 
     // 5분 10초 / 0분 45초 / 1시간 2분 3초 — 반올림 정수 초 기준
     static String fmtDuration(double seconds) {
@@ -202,7 +202,7 @@ final class SentryPlayPage {
             sb.append("</div>");
         }
         sb.append("<div class='sub' style='margin-top:18px'><a href='/sentry/replay'>재생 시험 보고서</a> &nbsp; <a href='/sentry/bsd'>BSD 인식 비교</a></div>");
-        return sb.append("</div></body></html>").toString();
+        return sb.append(SentrySource.NOTE).append("</div></body></html>").toString();
     }
 
     private static String todayKey() {

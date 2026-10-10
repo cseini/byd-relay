@@ -87,10 +87,13 @@ public class MainActivity extends AppCompatActivity {
             refreshStatus();
         }, 1000);
 
-        Button sentryViewBtn = findViewById(R.id.sentryViewButton);   // ★센트리 녹화 보기(10-08 운영자) — 운영자판만(공유판은 /sentry/*에 접속 권한 서명이 필요해 이 화면에서 못 연다)
-        if (BuildConfig.IS_OPERATOR) {
-            findViewById(R.id.sentrySection).setVisibility(android.view.View.VISIBLE);
-            sentryViewBtn.setOnClickListener(v -> startActivity(new Intent(this, SentryViewerActivity.class)));
+        // ★센트리 녹화 보기(10-08) · ★842 공유판도 — 센트리가 도는 차(디링크3, 씨라7은 센트리 시험판만)에서 보인다. 공유판은 릴레이 K로 만든 권한 값을 붙여 연다.
+        //   화면 이름으로 열어 센트리가 없는 갈래(d5 공유판)에서도 이 파일을 그대로 쓴다.
+        //   ★센트리를 켠 차에서만 칸을 보인다(운영자 10-10 "센트리 안 쓰는 사람은?") — 화면에 들어올 때마다 다시 본다(onResume).
+        Button sentryViewBtn = findViewById(R.id.sentryViewButton);
+        if (!DiLink5Support.isDiLink5() || BuildConfig.D5_SENTRY) {
+            updateSentrySection();
+            sentryViewBtn.setOnClickListener(v -> { try { startActivity(new Intent().setClassName(this, getPackageName() + ".SentryViewerActivity")); } catch (Throwable t) { android.widget.Toast.makeText(this, "이 판에는 센트리 녹화 보기가 없어요", android.widget.Toast.LENGTH_SHORT).show(); } });
         }
         ((Button) findViewById(R.id.relayButton)).setOnClickListener(v -> showRelayDialog());
         ((Button) findViewById(R.id.sendLogButton)).setOnClickListener(v -> sendDiagLogs());   // ★메인 노출(2026-09-08 운영자) — 설정 대화상자 안에 묻혀 테스터가 못 찾던 것
@@ -99,11 +102,6 @@ public class MainActivity extends AppCompatActivity {
 
         ((Button) findViewById(R.id.autostartTargetsButton)).setOnClickListener(v -> showAutostartTargetsDialog());
 
-        findViewById(R.id.netRecoverButton).setOnClickListener(v -> showNetRecoverDialog());   // ★847 통신 복구는 버튼 하나 → 팝업(운영자 10-08)
-        if (seatOn()) {   // ★845 뒷좌석 착좌 시험(운영자판·돌핀만) · ★847 체크하면 팝업
-            findViewById(R.id.seatSection).setVisibility(android.view.View.VISIBLE);
-            ((android.widget.CheckBox) findViewById(R.id.seatCheck)).setOnCheckedChangeListener((b, on) -> { if (on) showSeatDialog(); else if (seatDialog != null) seatDialog.dismiss(); });
-        }
 
         setupVersion();
         refreshStatus();
@@ -395,99 +393,12 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    // ★845 뒷좌석 3자리 착좌 화면 — 운영자판·돌핀만 · ★847 팝업이 떠 있는 동안만 1초마다 갱신
-    private boolean seatOn() { return BuildConfig.IS_OPERATOR && !DiLink5Support.isDiLink5(); }
-    private final android.os.Handler seatH = new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable seatTick = new Runnable() { @Override public void run() { refreshSeat(); seatH.postDelayed(this, 1000); } };
-    private android.app.Dialog seatDialog;
-    @Override protected void onResume() { super.onResume(); if (seatDialog != null) { seatH.removeCallbacks(seatTick); seatH.post(seatTick); } }
-    @Override protected void onPause() { seatH.removeCallbacks(seatTick); super.onPause(); }
-    // ★847 팝업 공통 — 어두운 카드 화면을 제목줄 없이 화면 폭 70%로
-    private android.app.Dialog showPanel(int layout) {
-        android.app.Dialog d = new android.app.Dialog(this);
-        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
-        d.setContentView(layout);
-        android.view.Window w = d.getWindow();
-        if (w != null) {
-            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
-            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.7f), android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
-        d.show();
-        return d;
-    }
-    private void showSeatDialog() {
-        if (seatDialog != null) return;
-        seatDialog = showPanel(R.layout.dialog_seat);
-        seatDialog.findViewById(R.id.seatCloseButton).setOnClickListener(v -> seatDialog.dismiss());
-        seatDialog.setOnDismissListener(d -> {
-            seatH.removeCallbacks(seatTick);
-            seatDialog = null;
-            ((android.widget.CheckBox) findViewById(R.id.seatCheck)).setChecked(false);
-        });
-        seatH.removeCallbacks(seatTick);
-        seatH.post(seatTick);
-    }
-    private void showNetRecoverDialog() {
-        android.app.Dialog d = showPanel(R.layout.dialog_netrecover);
-        d.findViewById(R.id.netCloseButton).setOnClickListener(v -> d.dismiss());
-        bindNetRecover(d, R.id.netStateButton, "통신 상태 보기", null);
-        bindNetRecover(d, R.id.netAirOffButton, "비행기 모드 끄기", "cmd connectivity airplane-mode disable 2>&1; settings put global airplane_mode_on 0 2>&1; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false 2>&1", () -> putGlobal(android.provider.Settings.Global.AIRPLANE_MODE_ON, 0));
-        bindNetRecover(d, R.id.netDataOnButton, "모바일 데이터 켜기", "svc data enable 2>&1; settings put global mobile_data 1 2>&1", () -> putGlobal("mobile_data", 1));
-        bindNetRecover(d, R.id.netApnButton, "APN 기본값 복원", "content delete --uri content://telephony/carriers/restore 2>&1");
-        bindNetRecover(d, R.id.netReconnectButton, "통신 재연결", "svc data disable 2>&1; sleep 2; svc data enable 2>&1");
-    }
-    private void refreshSeat() {
+    private void updateSentrySection() {
         SnifferService s = SnifferService.getInstance();
-        if (s == null || seatDialog == null) return;
-        SeatOccupancy.Snapshot sn = s.seatOcc().snapshot();
-        int[] ids = {R.id.seatL, R.id.seatC, R.id.seatR};
-        int[] colors = {0xFF5A6270, 0xFFF2C94C, 0xFF3DD68C, 0xFFF2994A};   // 빈자리 회색·벨트 안 맴 노랑·확실 초록·아마 주황
-        StringBuilder rs = new StringBuilder();
-        for (int i = 0; i < 3; i++) {
-            TextView t = (TextView) seatDialog.findViewById(ids[i]);
-            t.setText(SeatOccupancy.NAME[i] + "\n" + SeatOccupancy.VNAME[sn.verdict[i]] + (sn.remind[i] >= 0 ? "\n경고 " + sn.remind[i] : ""));
-            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-            bg.setColor(colors[sn.verdict[i]]);
-            bg.setCornerRadius(14 * getResources().getDisplayMetrics().density);
-            t.setBackground(bg);
-            rs.append(SeatOccupancy.NAME[i]).append(": ").append(sn.reason[i]).append('\n');
-        }
-        rs.append("체결 원값: ").append(sn.beltRaw.isEmpty() ? "—" : sn.beltRaw);
-        ((TextView) seatDialog.findViewById(R.id.seatReasonView)).setText(rs);
-        ((TextView) seatDialog.findViewById(R.id.seatEventsView)).setText(sn.events.isEmpty() ? "최근 이벤트 없음" : "최근 이벤트\n" + String.join("\n", sn.events));
+        boolean show = (!DiLink5Support.isDiLink5() || BuildConfig.D5_SENTRY) && s != null && s.sentryEnabled();
+        findViewById(R.id.sentrySection).setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
     }
-    private void bindNetRecover(android.app.Dialog d, int buttonId, String name, String cmd) { bindNetRecover(d, buttonId, name, cmd, null); }
-    // ★832 셸이 안 될 때(무선 ADB 닫힘) 앱 권한(WRITE_SECURE_SETTINGS)으로 직접 저장하는 대안 — 비행기 모드·모바일 데이터만
-    private String putGlobal(String key, int val) {
-        try {
-            android.provider.Settings.Global.putInt(getContentResolver(), key, val);
-            return key + "=" + val + " 저장(라디오 반영은 차마다 다름 — 안 바뀌면 시동을 껐다 켜 주세요)";
-        } catch (Throwable t) { return key + " 저장 실패 " + t.getClass().getSimpleName(); }
-    }
-    private void bindNetRecover(android.app.Dialog d, int buttonId, String name, String cmd, java.util.function.Supplier<String> appFallback) {
-        d.findViewById(buttonId).setOnClickListener(v -> {
-            final TextView out = (TextView) d.findViewById(R.id.netResultView);
-            out.setText(name + " 실행 중…");
-            new Thread(() -> {
-                SnifferService s = SnifferService.getInstance();
-                if (s == null) { runOnUiThread(() -> out.setText("릴레이가 실행 중이 아닙니다")); return; }
-                String before = s.netSnapshot();
-                String res = "(읽기만)";
-                if (cmd != null) {
-                    String adbNote = "";
-                    if (!AdbAccess.isPortOpen()) adbNote = AdbAccess.reviveAdbd(this) ? "[무선 ADB 되살림] " : "[무선 ADB 닫힘] ";   // ★832 NETFIX 때 이 차가 "셸 연결 안 됨"이었음
-                    String r = AdbAccess.runShell(this, cmd);
-                    if (r == null && appFallback != null) r = "셸 안 됨 → 앱 권한으로 " + appFallback.get();
-                    res = adbNote + (r == null ? "셸 연결 안 됨(무선 ADB 꺼짐·미허용)" : r.isEmpty() ? "OK" : r.replace('\n', ' '));
-                    try { Thread.sleep(4000); } catch (InterruptedException ignored) {}
-                }
-                String after = cmd == null ? before : s.netSnapshot();
-                final String msg = name + " → " + res + "\n전: " + before + "\n후: " + after;
-                s.postToD1("NETREC", msg.replace('\n', ' '));
-                runOnUiThread(() -> out.setText(msg));
-            }, "netrecover").start();
-        });
-    }
+    @Override protected void onResume() { super.onResume(); updateSentrySection(); }
 
     // ★로그 보내기(진단) — 쌓인 릴레이 로그를 개발자(D1)에게 1회 전송. 누를 때만(데이터 부담 0). 메인 버튼 + 설정 대화상자 공용.
     private void sendDiagLogs() {

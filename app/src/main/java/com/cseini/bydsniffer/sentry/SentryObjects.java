@@ -73,6 +73,15 @@ final class SentryObjects {
         return "sobj:" + eventId + ":" + (kind == 2 ? 'P' : 'V') + cameraCode(layoutMap, displayCell);
     }
 
+    // 사용자가 끈 종류(사람·차량)를 판정 결과에서 뺀다 — 설정 detect_person·detect_vehicle
+    static List<Found> filterKinds(List<Found> found, boolean person, boolean vehicle) {
+        List<Found> out = new ArrayList<>();
+        for (Found f : found) {
+            if ((f.kind == 2 && person) || (f.kind == 1 && vehicle)) out.add(f);
+        }
+        return out;
+    }
+
     // 못 찾았을 때 "왜"를 로그로 남기기 위한 설명(운영자 10-09: 실시간 판정이 재생 시험보다 덜 잡음 — 원인 확정용).
     // 점수 0.30 이상 후보를 높은 순으로 최대 maxN개: "차량52%[겹침.62→제외]" / "사람41%[새것]" / "사람35%[점수미달]"
     static String describe(float[][] cur, float[][] base, int maxN) {
@@ -117,6 +126,33 @@ final class SentryObjects {
 
     static boolean lightStep(float curMean, float baseMean) {
         return Math.abs(curMean - baseMean) >= LIGHT_STEP;
+    }
+
+    // ── 헤드라이트 판별(운영자 10-10 13:59 후방 영상: 멀리 있던 차가 헤드라이트를 켜 자동 노출이 어두워지며(밝기 -10) 주차 차 점수가 0.68→0.33, 먼 차는 작아 미검출
+    //    → "새 객체 없음+밝기 계단"이라 조명 의심으로 알림이 보류된 진짜 차) ──────────────────────────────────────────
+    // 기준 화면에는 없던 눈부신 점(Y≥240, 기준 Y<200)이 새로 생겼고 천장보다 아래에 있으면 헤드라이트. 천장 형광등이 켜지는 깜빡임은 위쪽(세로 0.14)에 0.05% 안팎.
+    // 오프라인 5영상: 헤드라이트 0.146%·세로 0.38, 깜빡임 0.05%·세로 0.14 — 표본이 얇아 기준은 보수적으로(로그로 계속 확인).
+    static final int SAT_CUR = 240, SAT_BASE = 200;
+    static final float HEADLIGHT_MIN_FRAC = 0.001f;   // 칸 넓이의 0.1%
+    static final float HEADLIGHT_MIN_Y = 0.25f;       // 새 밝은 점의 평균 세로 위치(0=맨 위) — 천장 조명은 이보다 위
+
+    // 한 칸(rx,ry,rw,rh)의 새 포화 픽셀 {칸 대비 비율 0~1, 평균 세로 위치 0~1}. 2픽셀 간격 표본이라 7MB 프레임에서도 가볍다
+    static float[] newSaturated(byte[] curNv21, byte[] baseNv21, int w, int rx, int ry, int rw, int rh) {
+        long n = 0, cnt = 0;
+        double ySum = 0;
+        for (int y = ry; y < ry + rh; y += 2) {
+            int o = y * w;
+            for (int x = rx; x < rx + rw; x += 2) {
+                n++;
+                if ((curNv21[o + x] & 0xFF) >= SAT_CUR && (baseNv21[o + x] & 0xFF) < SAT_BASE) { cnt++; ySum += (double) (y - ry) / rh; }
+            }
+        }
+        if (n == 0 || cnt == 0) return new float[]{0f, 0f};
+        return new float[]{(float) cnt / n, (float) (ySum / cnt)};
+    }
+
+    static boolean headlightLike(float[] sat) {
+        return sat != null && sat[0] >= HEADLIGHT_MIN_FRAC && sat[1] >= HEADLIGHT_MIN_Y;
     }
 
     // 기준 점수를 넘은 것 중 사람이 있으면 사람(가장 높은 점수), 없으면 차량(가장 높은 점수). 없으면 null

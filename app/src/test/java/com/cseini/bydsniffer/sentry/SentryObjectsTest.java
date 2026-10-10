@@ -117,4 +117,70 @@ public class SentryObjectsTest {
         assertTrue(e.length() <= 32);
         assertEquals("sobj:2026-10-09_09h08m02s:VF", SentryObjects.objectEvent("2026-10-09_09h08m02s", 1, new int[]{3, 0, 1, 2}, 0));
     }
+
+    // w x h의 Y 평면(NV21은 앞쪽이 Y)에 (x0,y0,bw,bh) 사각형을 값 v로 채운 프레임
+    private static byte[] frame(int w, int h, int base, int x0, int y0, int bw, int bh, int v) {
+        byte[] f = new byte[w * h * 3 / 2];
+        java.util.Arrays.fill(f, (byte) base);
+        for (int y = y0; y < y0 + bh; y++) for (int x = x0; x < x0 + bw; x++) f[y * w + x] = (byte) v;
+        return f;
+    }
+
+    @Test
+    public void headlight_newBrightBlobBelowCeilingIsHeadlight() {
+        int w = 400, h = 300;
+        byte[] base = frame(w, h, 90, 0, 0, 0, 0, 0);
+        byte[] cur = frame(w, h, 80, 190, 100, 14, 14, 250);   // 노출은 어두워졌고(90→80) 복도 가운데(세로 0.33~0.38)에 밝은 점 14x14=196px(0.16%)
+        float[] sat = SentryObjects.newSaturated(cur, base, w, 0, 0, w, h);
+        assertEquals(0.00163f, sat[0], 0.0004f);
+        assertTrue("세로 위치 " + sat[1], sat[1] > 0.3f && sat[1] < 0.4f);
+        assertTrue(SentryObjects.headlightLike(sat));
+    }
+
+    @Test
+    public void headlight_ceilingLampTurningOnIsNotHeadlight() {
+        int w = 400, h = 300;
+        byte[] base = frame(w, h, 100, 0, 0, 0, 0, 0);
+        byte[] cur = frame(w, h, 100, 100, 30, 28, 10, 250);   // 천장 쪽(세로 0.1~0.13) 형광등 켜짐 280px(0.23%)
+        float[] sat = SentryObjects.newSaturated(cur, base, w, 0, 0, w, h);
+        assertTrue(sat[0] > 0.001f);
+        assertFalse("천장 조명은 헤드라이트가 아님", SentryObjects.headlightLike(sat));
+    }
+
+    @Test
+    public void headlight_tinyOrAlreadyBrightBlobIsNotHeadlight() {
+        int w = 400, h = 300;
+        byte[] dim = frame(w, h, 90, 190, 100, 4, 4, 250);   // 16px(0.013%) — 너무 작음
+        assertFalse(SentryObjects.headlightLike(SentryObjects.newSaturated(dim, frame(w, h, 90, 0, 0, 0, 0, 0), w, 0, 0, w, h)));
+        byte[] already = frame(w, h, 90, 190, 100, 14, 14, 250);   // 기준 화면에도 이미 밝았던 점
+        assertFalse(SentryObjects.headlightLike(SentryObjects.newSaturated(already, already, w, 0, 0, w, h)));
+        assertFalse(SentryObjects.headlightLike(null));
+    }
+
+    @Test
+    public void headlight_cellSubRectUsesCellRelativePosition() {
+        int w = 400, h = 300;
+        byte[] base = frame(w, h, 90, 0, 0, 0, 0, 0);
+        byte[] cur = frame(w, h, 90, 250, 220, 20, 20, 250);   // 우하 칸(200,150,200,150) 안 세로 70~89행 → 평균 79/150 = 0.53
+        float[] sat = SentryObjects.newSaturated(cur, base, w, 200, 150, 200, 150);
+        assertEquals(0.527f, sat[1], 0.03f);
+        assertTrue(SentryObjects.headlightLike(sat));
+    }
+
+    @Test
+    public void filterKinds_dropsKindsTheUserTurnedOff() {
+        List<SentryObjects.Found> l = new ArrayList<>();
+        l.add(new SentryObjects.Found(2, 0.8f, 0, 0, 0, 1, 1));   // 사람
+        l.add(new SentryObjects.Found(1, 0.7f, 1, 0, 0, 1, 1));   // 차량
+        assertEquals(2, SentryObjects.filterKinds(l, true, true).size());
+        List<SentryObjects.Found> onlyCar = SentryObjects.filterKinds(l, false, true);
+        assertEquals(1, onlyCar.size());
+        assertEquals(1, onlyCar.get(0).kind);
+        List<SentryObjects.Found> onlyPerson = SentryObjects.filterKinds(l, true, false);
+        assertEquals(1, onlyPerson.size());
+        assertEquals(2, onlyPerson.get(0).kind);
+        assertEquals(0, SentryObjects.filterKinds(l, false, false).size());
+        // 사람이 꺼졌으면 사람이 있어도 차량이 고른다
+        assertEquals(1, SentryObjects.pick(SentryObjects.filterKinds(l, false, true)).kind);
+    }
 }

@@ -78,6 +78,6 @@ final class SentryReplayPage {
             for (String r : runs) sb.append("<a href='/sentry/replay?run=").append(esc(r)).append("'>").append(esc(r)).append("</a> &nbsp; ");
             sb.append("</div>");
         }
-        return sb.append("</div></body></html>").toString();
+        return sb.append(SentrySource.NOTE).append("</div></body></html>").toString();
     }
 }

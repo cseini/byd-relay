@@ -6,6 +6,8 @@ plugins {
 //   값이 없으면 앱을 만드는 작업(assemble·bundle)이 일부러 실패한다(빈 값으로 만든 앱은 서버와 통신 못 함). 컴파일·단위 시험은 빈 값으로도 된다.
 val relaySecret: String = (project.findProperty("BYD_RELAY_SECRET") as String?) ?: System.getenv("BYD_RELAY_SECRET") ?: ""
 val uploadSecret: String = (project.findProperty("BYD_UPLOAD_SECRET") as String?) ?: System.getenv("BYD_UPLOAD_SECRET") ?: ""
+// ★씨라7(DiLink5) 센트리 시험판 스위치(운영자 10-10 "베타의 베타 테스터") — -PD5_SENTRY=true로 만든 시험판 빌드에서만 씨라7에서도 센트리 코드가 살아난다. 기본(일반 배포)은 꺼짐.
+val d5Sentry: Boolean = (project.findProperty("D5_SENTRY") as String?) == "true" || System.getenv("D5_SENTRY") == "true"
 
 android {
     namespace = "com.cseini.bydsniffer"
@@ -17,10 +19,11 @@ android {
         applicationId = "com.cseini.bydsniffer"
         minSdk = 25
         targetSdk = 25   // ★일렉트로 동일 — 레거시 타깃으로 API 26+ 백그라운드 제한(서비스 강제종료·Doze 네트워크 차단) 회피
-        versionCode = 862
-        versionName = "862.0"
+        versionCode = 863
+        versionName = "863.0"
         buildConfigField("String", "RELAY_SECRET", "\"" + relaySecret + "\"")
         buildConfigField("String", "UPLOAD_SECRET", "\"" + uploadSecret + "\"")
+        buildConfigField("boolean", "D5_SENTRY", d5Sentry.toString())
 
         // ★WebRTC(libwebrtc)는 arm64-v8a만 번들 — 헤드유닛은 arm64(/system/lib64). APK 4ABI×20MB → 단일ABI로 축소.
         ndk {

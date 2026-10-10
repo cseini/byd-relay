@@ -227,6 +227,10 @@ public final class SentryManager {
         State st = state;
         if (st != State.ARMED && st != State.RECORDING) return;
         lastFrameElapsed = SystemClock.elapsedRealtime();
+        if (armFailures > 0) {   // 프레임이 2분 넘게 끊김 없이 흘렀으면 카메라가 안정된 것 — 재시도 간격을 처음으로
+            if (firstFrameAt == 0L) firstFrameAt = lastFrameElapsed;
+            else if (lastFrameElapsed - firstFrameAt >= 120_000L) { armFailures = 0; firstFrameAt = 0L; }
+        }
         PreRollEncoder e = encoder;
         if (e == null || w != frameW || fh != frameH) {
             if (pipeBuilding.compareAndSet(false, true)) post(() -> buildPipeline(w, fh));
@@ -238,7 +242,7 @@ public final class SentryManager {
             post(() -> saveThumb(tid, copy, w, fh));
         }
         e.feed(nv21, nowMs);
-        if (st == State.ARMED && nowMs - lastBaseCapture >= BASE_EVERY_MS) captureBase(nv21, nowMs);
+        if (st == State.ARMED && nowMs - lastBaseCapture >= BASE_EVERY_MS && settings.objectsOn()) captureBase(nv21, nowMs);   // 객체 인식을 껐으면 기준 화면 복사(7MB·3초마다)도 안 한다
         long due = classifyDue;
         if (due != 0 && nowMs >= due && st == State.RECORDING && classifyId != null && classifyId.equals(eventId)) {   // 이벤트 중 재판정 시각이 됐으면 이 프레임으로
             classifyDue = 0;
@@ -796,6 +800,11 @@ public final class SentryManager {
                         .put("n", m.segments.size())
                         .put("b", Math.round(bytes / 1048576.0))
                         .put("f", m.favorite ? 1 : 0);
+                // ★863 목록에서 바로 보이게(운영자 10-10) — 가장 높은 사람·차량 판정 하나 {종류 1차량·2사람, 점수%}와 조명 의심(l=1). 녹화 하나당 10자 안팎
+                float[] best = null;
+                for (float[] ob : m.objects) if (ob != null && ob.length >= 2 && (best == null || ob[1] > best[1])) best = ob;
+                if (best != null) o.put("o", new JSONArray().put((int) best[0]).put((int) best[1]));
+                if (m.light) o.put("l", 1);
                 used += o.toString().length() + 1;
                 if (used > maxChars) { more = true; break; }
                 events.put(o);
@@ -944,9 +953,32 @@ public final class SentryManager {
         return (!settings.enabled || host.ignitionState() == 1 || host.camOff()) ? State.IDLE : State.PAUSED;
     }
 
+    private int armFailures;          // 연속 무장·세션 실패 횟수(씨라7 재시도 간격용)
+    private long armBlockedUntil;     // 이 시각(elapsedRealtime)까지 다시 무장하지 않음
+    private volatile long firstFrameAt;   // 이번 세션의 첫 프레임 시각(재시도 간격 초기화 판단용)
+
+    // 씨라7 카메라 재시도 간격 — 실패 1회 1분, 이후 2·4·8분, 최대 15분
+    static long armBackoffMs(int failures) {
+        if (failures <= 0) return 0L;
+        return Math.min(15L * 60_000L, 60_000L << Math.min(failures - 1, 4));
+    }
+
+    private void noteArmFailure() {
+        if (!host.conservativeRetry()) return;
+        armFailures++;
+        long ms = armBackoffMs(armFailures);
+        armBlockedUntil = SystemClock.elapsedRealtime() + ms;
+        log("카메라 재시도 간격 늘림 — 연속 실패 " + armFailures + "회, " + (ms / 60000L) + "분 뒤 다시");
+    }
+
     private void arm() {
         final SentryHost hs = host;
         final SentrySettings s = settings;
+        if (hs.conservativeRetry() && SystemClock.elapsedRealtime() < armBlockedUntil) {
+            setState(State.PAUSED, "카메라 재시도 대기");
+            return;
+        }
+        firstFrameAt = 0L;
         trace("무장 시도 storage=" + s.storage);
         // ★저장소 준비(볼륨 목록 바인더 호출·폴더 쓰기 시험)는 별도 스레드에서 5초까지만 기다린다 — 외장 입출력이 죽어 있으면 여기서 핸들러가 통째로 멈추던 것(FB2106·193407)
         final long t0 = SystemClock.elapsedRealtime();
@@ -1006,6 +1038,7 @@ public final class SentryManager {
         if (r != null && !r.startsWith("감지 시작")) {
             err = r;
             log("센트리 무장 실패 — " + r);
+            noteArmFailure();
             storage.unpin();
             setState(State.PAUSED, r);
             return;
@@ -1064,6 +1097,7 @@ public final class SentryManager {
         if (st != State.ARMED && st != State.RECORDING) return;
         err = msg;
         log("센트리 오류 — " + msg);
+        noteArmFailure();
         stopSession(State.PAUSED, msg, true);
     }
 
@@ -1101,6 +1135,9 @@ public final class SentryManager {
         settings = ns;
         State st = state;
         boolean active = st == State.ARMED || st == State.RECORDING;
+        if (old != null && old.objectsOn() && !ns.objectsOn()) {   // 객체 인식을 껐으면 모델 메모리를 돌려준다
+            try { host.objectRelease(); } catch (Throwable t) { log("물체 인식 반납 오류 — " + t); }
+        }
         if (!ns.enabled) {
             handler.removeCallbacks(armTask);
             handler.removeCallbacks(restartTask);
@@ -1372,6 +1409,7 @@ public final class SentryManager {
     private void classifyEvent(String id, byte[] cur, int w, int fh, int attempt) {
         try {
             synchronized (lock) { if (!id.equals(eventId) || !recording) return; }
+            if (!settings.objectsOn()) { notifyNow(id); return; }   // 판정 도중에 사용자가 객체 인식을 껐으면 바로 알림
             long t0 = SystemClock.elapsedRealtime();
             byte[] base = takeBase(t0, cur.length);
             if (base == null) {
@@ -1390,6 +1428,7 @@ public final class SentryManager {
             final long baseAge = lastBaseAgeMs;
             StringBuilder why = new StringBuilder();   // 못 찾았을 때 칸별 후보와 제외 사유(원인 확정용 로그)
             java.util.TreeSet<Integer> lightCells = new java.util.TreeSet<>();   // 기준 화면 대비 밝기가 계단처럼 변한 칸
+            java.util.TreeSet<Integer> headlightCells = new java.util.TreeSet<>();   // 밝기 계단이지만 새 헤드라이트가 보이는 칸(조명 의심 아님 — 먼 차)
             for (int d : cells) {
                 int rx = (d % 2) * cw, ry = (d / 2) * ch;
                 float[][] dc = host.objectDetect(curD, w, fh, rx, ry, cw, ch, 0.30f);
@@ -1397,13 +1436,23 @@ public final class SentryManager {
                 if (dc == null || db == null) { log("물체 판정 불가 — 인식 모델이 준비되지 않음"); notifyNow(id); return; }
                 all.addAll(SentryObjects.newOnly(dc, db, d));
                 why.append(" | 칸").append(d).append(" 현재 ").append(SentryObjects.describe(dc, db, 4)).append(" / 기준 ").append(db.length).append("개");
-                if (SentryObjects.lightStep(SentryObjects.cellMeanY(curD, w, rx, ry, cw, ch), SentryObjects.cellMeanY(baseD, w, rx, ry, cw, ch))) lightCells.add(d);
+                if (settings.lightJudgeOn() && SentryObjects.lightStep(SentryObjects.cellMeanY(curD, w, rx, ry, cw, ch), SentryObjects.cellMeanY(baseD, w, rx, ry, cw, ch))) {
+                    float[] sat = SentryObjects.newSaturated(curD, baseD, w, rx, ry, cw, ch);
+                    if (SentryObjects.headlightLike(sat)) {
+                        headlightCells.add(d);
+                        why.append(String.format(java.util.Locale.US, " 헤드라이트 의심(새 밝은 점 %.2f%%·세로 %.2f)", sat[0] * 100f, sat[1]));
+                    } else {
+                        lightCells.add(d);
+                        if (sat[0] > 0f) why.append(String.format(java.util.Locale.US, " 새 밝은 점 %.2f%%·세로 %.2f(헤드라이트 기준 미달)", sat[0] * 100f, sat[1]));
+                    }
+                }
             }
             long ms = SystemClock.elapsedRealtime() - t0;
+            all = SentryObjects.filterKinds(all, settings.personOn(), settings.vehicleOn());   // 사용자가 끈 종류는 판정 결과에서 뺀다
             SentryObjects.Found f = SentryObjects.pick(all);
             if (f == null) {
                 boolean light = !lightCells.isEmpty();
-                log("물체 판정 — 새로 나타난 사람·차량 없음(칸 " + cells + ", " + ms + "ms, 시도 " + (attempt + 1) + (light ? ", 밝기 변화 칸 " + lightCells : "") + ")"
+                log("물체 판정 — 새로 나타난 사람·차량 없음(칸 " + cells + ", " + ms + "ms, 시도 " + (attempt + 1) + (light ? ", 밝기 변화 칸 " + lightCells : "") + (headlightCells.isEmpty() ? "" : ", 헤드라이트 칸 " + headlightCells) + ")"
                         + " 기준나이 " + String.format(java.util.Locale.US, "%.1f", baseAge / 1000f) + "초" + why);
                 if (attempt < 2) { classifyId = id; classifyAttempt = attempt + 1; classifyDue = SystemClock.elapsedRealtime() + (attempt == 0 ? 1500L : 2500L); }
                 if (!light) notifyNow(id);   // 일반 움직임(조명 아님)은 첫 판정 뒤 바로 알림
@@ -1446,7 +1495,8 @@ public final class SentryManager {
         try {
             PreRollEncoder e = encoder;
             if (state != State.ARMED || e == null) return;
-            if (settings.filterPerson || settings.filterVehicle) {
+            final boolean fPerson = settings.filterPerson && settings.personOn(), fVehicle = settings.filterVehicle && settings.vehicleOn();   // 끈 종류는 거르기에서도 뺀다
+            if (fPerson || fVehicle) {
                 byte[] det = frame;
                 SentryDewarp ddw = e.dewarp();   // 칸별 보정이 켜져 있으면 편 화면으로 인식(어안 그대로보다 점수가 높음, 10-07 시험)
                 if (ddw != null) {
@@ -1454,7 +1504,7 @@ public final class SentryManager {
                     if (ddw.toNv21(frame, t, w, fh)) det = t;
                 }
                 float[] sc = host.objectScores(det, w, fh);
-                boolean pass = objectPass(sc, settings.filterPerson, settings.filterVehicle);
+                boolean pass = objectPass(sc, fPerson, fVehicle);
                 String detail = sc == null ? "측정 불가(통과)" : String.format(java.util.Locale.US, "사람 %.2f 차량 %.2f (%dms)", sc[0], sc[1], host.objectLastMs());
                 long nowO = SystemClock.elapsedRealtime();
                 if (!pass) {
@@ -1487,9 +1537,13 @@ public final class SentryManager {
             setState(State.RECORDING, "움직임 감지");
             saveThumb(id, frame, w, fh);
             synchronized (notifyLock) { notifyId = id; notifyState = 0; }
-            handler.postDelayed(() -> notifyNow(id), NOTIFY_MAX_DELAY_MS);   // 판정이 안 와도 이 시간엔 보낸다
-            final byte[] clsFrame = frame;
-            classifyExec.execute(() -> classifyEvent(id, clsFrame, w, fh, 0));   // 사람·차량 판정은 녹화·알림을 막지 않게 따로
+            if (!settings.objectsOn()) {
+                notifyNow(id);   // 객체 인식을 껐으면 예전처럼 움직임만으로 바로 알림(판정을 기다리지 않음)
+            } else {
+                handler.postDelayed(() -> notifyNow(id), NOTIFY_MAX_DELAY_MS);   // 판정이 안 와도 이 시간엔 보낸다
+                final byte[] clsFrame = frame;
+                classifyExec.execute(() -> classifyEvent(id, clsFrame, w, fh, 0));   // 사람·차량 판정은 녹화·알림을 막지 않게 따로
+            }
             handler.removeCallbacks(motionTask);
             handler.postDelayed(motionTask, 1000L);
         } catch (Throwable t) {

@@ -145,9 +145,13 @@ public final class SentryStorage {
             o.put("limitMb", limit);
             JSONArray vols = new JSONArray();
             vols.put(internalJson());
-            List<Vol> rem = removableMounted();
-            vols.put(removableJson("sd", rem.size() > 0 ? rem.get(0) : null, "sd".equals(settings.storage)));
-            vols.put(removableJson("usb", rem.size() > 1 ? rem.get(1) : null, "usb".equals(settings.storage)));
+            if (SentrySettings.isInternalOnly()) {   // 씨라7 시험판: 내장만 — 앱이 SD·USB 선택지를 보이지 않게 목록에서 뺀다
+                o.put("internalOnly", true);
+            } else {
+                List<Vol> rem = removableMounted();
+                vols.put(removableJson("sd", rem.size() > 0 ? rem.get(0) : null, "sd".equals(settings.storage)));
+                vols.put(removableJson("usb", rem.size() > 1 ? rem.get(1) : null, "usb".equals(settings.storage)));
+            }
             o.put("volumes", vols);
             JSONObject est = new JSONObject();
             est.put("hd", calcEstimateHours(limit, kbpsFor("hd")));

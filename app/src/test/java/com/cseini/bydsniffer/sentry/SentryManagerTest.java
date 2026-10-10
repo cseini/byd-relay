@@ -247,4 +247,15 @@ public class SentryManagerTest {
         org.junit.Assert.assertEquals(76, full.getJSONArray("objects").getJSONArray(0).getInt(1));
         org.junit.Assert.assertTrue(full.getBoolean("retro"));
     }
+
+    @Test
+    public void armBackoff_growsFromOneToFifteenMinutes() {
+        assertEquals(0L, SentryManager.armBackoffMs(0));
+        assertEquals(60_000L, SentryManager.armBackoffMs(1));
+        assertEquals(120_000L, SentryManager.armBackoffMs(2));
+        assertEquals(240_000L, SentryManager.armBackoffMs(3));
+        assertEquals(480_000L, SentryManager.armBackoffMs(4));
+        assertEquals(900_000L, SentryManager.armBackoffMs(5));
+        assertEquals(900_000L, SentryManager.armBackoffMs(50));
+    }
 }

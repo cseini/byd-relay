@@ -226,7 +226,7 @@ public final class BsdVision {
         if (list.isEmpty()) sb.append("<div class='sub'>아직 기록이 없습니다. BSD 신호가 오면 쌓입니다(보조 카메라가 켜져 있어야 함).</div>");
         sb.append("<script>function lab(id,s,v,b){fetch('/sentry/bsd/label',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,side:s,v:v})})"
                 + ".then(function(r){return r.json();}).then(function(j){if(j.ok){var p=b.parentNode.children;for(var i=0;i<p.length;i++)p[i].className='';b.className='on';}else alert('저장 실패');});}</script>");
-        return sb.append("</div></body></html>").toString();
+        return sb.append(SentrySource.NOTE).append("</div></body></html>").toString();
     }
 
     private static String esc(String s) { return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&#39;"); }

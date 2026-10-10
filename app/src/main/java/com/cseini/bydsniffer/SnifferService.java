@@ -207,6 +207,8 @@ public class SnifferService extends Service {
     private volatile int lastAccValue = Integer.MIN_VALUE;
     private volatile boolean accActive = false;
 
+    public String sentrySelfGrant() { RelayClient rc = relay; return rc != null ? rc.selfSentryGrantQuery() : null; }   // ★녹화 보기 화면이 공유판에서도 열리게
+    public boolean sentryEnabled() { try { return SentryManager.get().enabled(); } catch (Throwable t) { return false; } }   // ★메인 화면 센트리 칸(켠 차만)
     public static SnifferService getInstance() {
         return instance;
     }
@@ -412,11 +414,15 @@ public class SnifferService extends Service {
             initIccAudio();   // ★v115 ICC 오프 효과음 SoundPool 준비
             bsdExp.enabled = prefs != null && prefs.getBoolean("bsdexp_enabled", true);   // ★602 BSD실험 활성 상태
             // ★센트리 1단계(DiLink3 전용, 공유판 포함 — 기본 꺼짐이라 켠 차만 동작) — startRelay 앞이어야 릴레이가 보내는 초기 시동 이벤트가 안 버려진다. init 실패가 onCreate를 끊지 않게 격리.
-            if (!DiLink5Support.isDiLink5()) {
+            if (!DiLink5Support.isDiLink5() || BuildConfig.D5_SENTRY) {   // ★씨라7은 -PD5_SENTRY=true 시험판에서만(운영자 10-10), 저장소는 내장 고정
+                if (DiLink5Support.isDiLink5()) com.cseini.bydsniffer.sentry.SentrySettings.setInternalOnly(true);
                 try { SentryManager.get().init(sentryHost()); } catch (Throwable t) { postToD1("SENTRY", "init 실패: " + t); }
+            }
+            if (!DiLink5Support.isDiLink5()) {
                 try { BsdVision.get().setHost(bsdVisionHost()); } catch (Throwable t) { postToD1("BSDVISION", "init 실패: " + t); }
             }
             startRelay();
+            if (relay != null && DiLink5Support.isDiLink5() && BuildConfig.D5_SENTRY) relay.putStatus("sentry_d5", "1");   // ★씨라7 센트리 시험판 표지 — 앱이 개발자 모드(로고 10탭)에서만 센트리 메뉴를 보일 때 이 값을 본다
             if (relay != null && DiLink5Support.isDiLink5() && prefs != null) relay.putStatus("d5cam_mode", prefs.getString("d5cam_mode", "legacy"));   // ★712 씨라7 카메라 방식(앱 토글 표시용) ★722 기본 legacy(공유판 721 실차 2대 4분할 2칸 까맣게 — 운영자 "722로 기본 기존")
             if (IS_D5) { loadD5Slots(); publishClusterCamCfg(); }   // ★745 씨라7 보조 칸 배치 불러오기 + 앱에 켬·칸 알림
             if (relay != null && btAudioCutOn()) relay.putStatus("bt_audio_off", 1);   // ★715 오디오 끊기 켠 차 표시 ★810 운영자판은 기본 켬
@@ -2098,7 +2104,7 @@ public class SnifferService extends Service {
         if ("CAMSHOT".equals(action)) return camShot(params);
         if ("CAMDUALPROBE".equals(action)) return camOffOn() ? CAM_OFF_MSG : clusterDualProbe();   // ★클러스터 2단계 진단(2026-09-17) — 전방 감지 중 AVM view5 동시 open 가능 여부 실차 판정
         if ("SENTRY_SET".equals(action) || "SENTRY_STATUS".equals(action) || "SENTRY_LIST".equals(action) || "SENTRY_CALENDAR".equals(action) || "SENTRY_CLEAR".equals(action) || "SENTRY_THUMB".equals(action) || "SENTRY_CUT".equals(action) || "SENTRY_MARKS".equals(action)) {   // ★센트리(docs/SENTRY-DESIGN.md 훅 v2) — relay-loop 인라인이라 SET은 새 스레드로 넘기고 즉시 반환, STATUS는 파일시스템을 안 만지는 캐시만
-            if (DiLink5Support.isDiLink5()) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";   // ★공유판은 매니저 미초기화라 ok:true로 오인되지 않게 거부
+            if (DiLink5Support.isDiLink5() && !BuildConfig.D5_SENTRY) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";   // ★공유판은 매니저 미초기화라 ok:true로 오인되지 않게 거부(씨라7 시험판 D5_SENTRY만 예외)
             if ("SENTRY_STATUS".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().cachedStatusJson().toString()); return null; }   // ★null=ok:true, 상태는 data로(DATAUSE 방식)
             if ("SENTRY_LIST".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteList(params != null ? params.optString("date") : null).toString()); return null; }   // ★집에서 보는 목록 — 하루치 7000자 이내(워커 8000자 절단)
             if ("SENTRY_CUT".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().cutNow().toString()); return null; }   // ★지금 보기 — 현재 조각을 바로 닫음(최대 약 3초 대기)
@@ -2123,7 +2129,7 @@ public class SnifferService extends Service {
         if ("CAMH264LIVE".equals(action)) return camH264Stream(params);   // ★v195 H.264 라이브(지속연결→워커→폰 WebCodecs)
         if ("CAMRTC".equals(action)) return camRtc(params);   // ★v266 WebRTC P2P — 카메라→libwebrtc→SRTP 폰 직결(워커=시그널링만)
         if ("SENTRY_RTC".equals(action)) {   // ★779 센트리 집에서 재생 — 폰과 데이터 채널 직결로 녹화 조각 전송(카메라 안 씀, 폰 K 서명 명령)
-            if (DiLink5Support.isDiLink5()) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";
+            if (DiLink5Support.isDiLink5() && !BuildConfig.D5_SENTRY) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";
             return sentryRtc(params);
         }
         if ("CARSET".equals(action)) { String out = "CARSET: " + carSet(params); postToD1("DILINK_CMD", out); return out; }   // ★v177 setProperty 쓰기(★2026-09-03 공유판도 허용 — 제어 테스트).
@@ -2917,8 +2923,8 @@ public class SnifferService extends Service {
             e.putLong("du_d_loop", (dayChg ? 0 : prefs.getLong("du_d_loop", 0)) + Math.max(0, dl));   // ★744 그날 뺀 내부 통신(검증용)
             // ★699 용도별 계측(관측 전용) — 이번 60초 증가분 d를 모바일일 때만 그 순간 상태 버킷(카메라/감지/시동ON/유휴)에 귀속 + postJson 본문 바이트·횟수.
             //   버킷은 "그 순간 상태" 기준 근사치(카메라 끝난 직후 잔여 등 섞일 수 있음). 날이 바뀌면 0부터.
-            long pn = RelayClient.duPollN.getAndSet(0), pb = RelayClient.duPollB.getAndSet(0), xn = RelayClient.duPostN.getAndSet(0), xb = RelayClient.duPostB.getAndSet(0);
-            String[] dk = {"bk_idle", "bk_on", "bk_cam", "bk_det", "poll_n", "poll_b", "post_n", "post_b"};
+            long pn = RelayClient.duPollN.getAndSet(0), pb = RelayClient.duPollB.getAndSet(0), xn = RelayClient.duPostN.getAndSet(0), xb = RelayClient.duPostB.getAndSet(0), ph = RelayClient.duPollH.getAndSet(0);
+            String[] dk = {"bk_idle", "bk_on", "bk_cam", "bk_det", "poll_n", "poll_b", "post_n", "post_b", "poll_h"};
             long[] dv = new long[dk.length];
             for (int i = 0; i < dk.length; i++) dv[i] = dayChg ? 0 : prefs.getLong("du_d_" + dk[i], 0);
             if (k == 0) {
@@ -2926,7 +2932,7 @@ public class SnifferService extends Service {
                     int bk = (camStreaming || h264Streaming || rtcActive) ? 2 : detectActive ? 3 : (relay != null && relay.ignitionState() == 1) ? 1 : 0;
                     dv[bk] += d;
                 }
-                dv[4] += pn; dv[5] += pb; dv[6] += xn; dv[7] += xb;
+                dv[4] += pn; dv[5] += pb; dv[6] += xn; dv[7] += xb; dv[8] += ph;
             }
             for (int i = 0; i < dk.length; i++) e.putLong("du_d_" + dk[i], dv[i]);
             // ★701 절감 사전 진단(관측 전용) — 전체 푸시 사유·바뀐 키·압축 효과·폴링 응답 명령 포함 비율. 모바일일 때만 일 누적(그 외엔 비우기만).
@@ -2952,7 +2958,7 @@ public class SnifferService extends Service {
     }
     private static String dataUseBreakdown(android.content.SharedPreferences p) {
         return "유휴 " + mb(p.getLong("du_d_bk_idle", 0)) + "·시동ON " + mb(p.getLong("du_d_bk_on", 0)) + "·카메라 " + mb(p.getLong("du_d_bk_cam", 0)) + "·감지 " + mb(p.getLong("du_d_bk_det", 0))
-                + " | 폴링 " + p.getLong("du_d_poll_n", 0) + "회 " + mb(p.getLong("du_d_poll_b", 0)) + "·그외전송 " + p.getLong("du_d_post_n", 0) + "회 " + mb(p.getLong("du_d_post_b", 0)) + "(본문만)"
+                + " | 폴링 " + p.getLong("du_d_poll_n", 0) + "회 " + mb(p.getLong("du_d_poll_b", 0)) + "(헤더 " + mb(p.getLong("du_d_poll_h", 0)) + " 별도" + (RelayClient.duProto.isEmpty() ? "" : "·" + RelayClient.duProto) + ")·그외전송 " + p.getLong("du_d_post_n", 0) + "회 " + mb(p.getLong("du_d_post_b", 0)) + "(본문만)"
                 + " | 진단701(" + p.getString("du_dg_since", "?") + "부터·모바일) 유휴 전체푸시 변경" + p.getLong("du_d_dg0", 0) + "·5분정기" + p.getLong("du_d_dg1", 0) + "·최초재전송" + p.getLong("du_d_dg2", 0)
                 + "·비유휴 " + p.getLong("du_d_dg3", 0) + " / 압축 " + p.getLong("du_d_dg6", 0) + "회 원본" + mb(p.getLong("du_d_dg4", 0)) + "→gz " + mb(p.getLong("du_d_dg5", 0))
                 + " / 폴링응답 명령포함 유휴 " + p.getLong("du_d_dg8", 0) + "/" + p.getLong("du_d_dg7", 0) + "·비유휴 " + p.getLong("du_d_dg10", 0) + "/" + p.getLong("du_d_dg9", 0)
@@ -3974,7 +3980,6 @@ public class SnifferService extends Service {
         long now = System.currentTimeMillis();
         if (now - d3SeatAt < 5000) return;
         d3SeatAt = now;
-        if (BuildConfig.IS_OPERATOR) seatOcc.setBeltRaw(beltRawNow());   // ★845 착좌 화면용 체결 원값(5초, 바뀔 때만 기록)
         try {
             if (d3SeatProbes == null) {
                 d3SeatProbes = new java.util.ArrayList<>();
@@ -4832,6 +4837,7 @@ public class SnifferService extends Service {
             @Override public boolean rtcActive() { return (rtcActive && !rtcTapsSentry) || camStreaming || h264Streaming; }   // ★실시간 보기가 센트리 프레임을 받아 쓰는 중이면 게이트가 막지 않는다
             @Override public boolean detectActive() { return detectActive && !detectSentryMode && !canTapDetect(); }   // ★주차 AVM 감지는 센트리가 프레임을 나눠 쓰므로 막지 않는다
             @Override public boolean phoneNearFresh() { return SnifferService.this.phoneNearFresh(); }
+            @Override public boolean conservativeRetry() { return DiLink5Support.isDiLink5(); }
             @Override public boolean lowVoltage() { return lowVoltFlag == 1 && lowSinceMs > 0 && System.currentTimeMillis() - lowSinceMs > lowSustainMs; }
             @Override public int batteryPct() { return lastTripSoc; }
             @Override public float[] objectScores(byte[] nv21, int w, int h) { return sentryObjectScores(nv21, w, h); }
@@ -6490,7 +6496,7 @@ public class SnifferService extends Service {
         final boolean scvReq = params != null && params.optBoolean("scv", false);   // ★센트리 미리보기(10-08) — 저장된 칸별 어안 보정(cell_views)만 입혀 내보냄(배치·뒤집기는 앱이 직접 입힘, 감지 영역은 원본 그대로)
 
         rtcTapsSentry = keepSentry;
-        rtcActive = true; rtcIceConnected = false; RelayClient.cameraActive = true;
+        rtcActive = true; rtcIceConnected = false; RelayClient.cameraActive = true; camRtcT0 = System.currentTimeMillis();
         rtcThread = new Thread(() -> {
             Object cam = null; Class<?> ncCls = null;
             org.webrtc.PeerConnectionFactory factory = null;
@@ -6844,6 +6850,7 @@ public class SnifferService extends Service {
                 try { if (fastcamBk[0] != null) fastcamBk[0].stop(); } catch (Throwable ig) {}   // ★fast_cam TCP 브리지 정지(fast_cam_capture+브리지 프로세스)
                 try { if (d5cam[0] != null) d5cam[0].stop(); } catch (Throwable ig) {}   // ★DiLink5 QCarCam 정지(프로세스+GL스레드)
                 try { if (quadBk[0] != null) quadBk[0].stop(); } catch (Throwable ig) {}   // ★쿼드 백엔드 정지(4연결+브리지)
+                postToD1("CAMRTC", "원격 영상 " + rtcUsage(pc, camRtcT0));   // ★863 원격 영상 데이터 기록
                 try { if (pc != null) pc.dispose(); } catch (Throwable ig) {}
                 try { if (vsrc != null) vsrc.dispose(); } catch (Throwable ig) {}
                 try { if (factory != null) factory.dispose(); } catch (Throwable ig) {}
@@ -6879,6 +6886,34 @@ public class SnifferService extends Service {
         synchronized (sentryRtcLock) { return sentryRtcGen == gen; }
     }
 
+    // ★863 원격 영상 데이터 기록(운영자 10-10 "링크락이 쓴 양만") — 연결을 닫기 직전 WebRTC 통계에서 실제로 보낸 바이트와 경로를 읽는다.
+    //   경로 relay = 서버(TURN) 중계, host·srflx·prflx = 폰과 직접. 통계를 0.8초 안에 못 받으면 "?"로 남긴다.
+    private volatile long camRtcT0 = 0, sentryRtcT0 = 0;
+    private String rtcUsage(org.webrtc.PeerConnection pc, long t0) {
+        final long[] b = {-1}; final String[] path = {"?"};
+        if (pc != null) {
+            final java.util.concurrent.CountDownLatch l = new java.util.concurrent.CountDownLatch(1);
+            try {
+                pc.getStats(rep -> {
+                    try {
+                        java.util.Map<String, org.webrtc.RTCStats> m = rep.getStatsMap();
+                        for (org.webrtc.RTCStats st : m.values()) {
+                            Object v = st.getMembers().get("bytesSent");
+                            if ("transport".equals(st.getType()) && v instanceof Number) b[0] = Math.max(b[0], ((Number) v).longValue());
+                            if ("candidate-pair".equals(st.getType()) && Boolean.TRUE.equals(st.getMembers().get("nominated"))) {
+                                org.webrtc.RTCStats lc = m.get(String.valueOf(st.getMembers().get("localCandidateId")));
+                                if (lc != null) path[0] = String.valueOf(lc.getMembers().get("candidateType"));
+                            }
+                        }
+                    } catch (Throwable ig) {} finally { l.countDown(); }
+                });
+                l.await(800, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Throwable ig) {}
+        }
+        long sec = t0 > 0 ? (System.currentTimeMillis() - t0) / 1000 : -1;
+        return "보낸 양 " + (b[0] < 0 ? "?" : String.format(java.util.Locale.US, "%.1fMB", b[0] / 1048576.0)) + " · " + sec + "초 · 경로 " + path[0] + ("relay".equals(path[0]) ? "(서버 중계)" : "") + " · 망 " + netSummary();
+    }
+
     // 콜백(시그널링 스레드) 안에서 dispose하면 멈출 수 있어 항상 별도 스레드에서 부른다
     private void closeSentryRtc(String why) {
         org.webrtc.PeerConnection pc;
@@ -6888,6 +6923,7 @@ public class SnifferService extends Service {
             sentryRtcPc = null; sentryRtcFactory = null;
         }
         if (pc == null && f == null) return;
+        postToD1("SENTRYRTC", "원격 재생 " + rtcUsage(pc, sentryRtcT0));   // ★863 원격 영상 데이터 기록
         try { if (pc != null) pc.dispose(); } catch (Throwable t) { postToD1("SENTRYRTC", "연결 정리 오류 " + rootMsg(t)); }
         try { if (f != null) f.dispose(); } catch (Throwable t) { postToD1("SENTRYRTC", "팩토리 정리 오류 " + rootMsg(t)); }
         postToD1("SENTRYRTC", "세션 정리 — " + why);
@@ -6942,7 +6978,7 @@ public class SnifferService extends Service {
             });
             if (pc == null) throw new IllegalStateException("PeerConnection 생성 실패");
             synchronized (sentryRtcLock) {
-                if (sentryRtcGen == gen) { sentryRtcPc = pc; sentryRtcFactory = factory; owned = true; }
+                if (sentryRtcGen == gen) { sentryRtcPc = pc; sentryRtcFactory = factory; owned = true; sentryRtcT0 = System.currentTimeMillis(); }
             }
             if (!owned) throw new IllegalStateException("그새 새 요청이 와서 이 세션은 버림");
             final org.webrtc.PeerConnection fpc = pc;
@@ -13443,27 +13479,6 @@ public class SnifferService extends Service {
     }
     private final java.util.Map<String, String> seatEvtLast = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<String, Integer> beltRem = new java.util.concurrent.ConcurrentHashMap<>();
-    // ★845 돌핀 뒷좌석 3자리 착좌 판정(운영자판만) — 판정 변화는 SEAT3 로그로
-    private final SeatOccupancy seatOcc = new SeatOccupancy(m -> postToD1("SEAT3", m));
-    SeatOccupancy seatOcc() { return seatOcc; }
-    /** 체결 원값(계기·안전벨트 getSafetyBeltStatus 0~5) — 자리·0/1 의미 미확정이라 날것 그대로 화면에 보여 시험으로 확정 */
-    private String beltRawNow() {
-        StringBuilder sb = new StringBuilder();
-        Object[][] devs = {{"계기", deviceByName("instrument")}, {"벨트", deviceByName("safetybelt")}};
-        for (Object[] d : devs) {
-            if (d[1] == null) continue;
-            sb.append(d[0]).append('[');
-            for (int i = 0; i <= 5; i++) {
-                try {
-                    Object r = d[1].getClass().getMethod("getSafetyBeltStatus", int.class).invoke(d[1], i);
-                    String v = String.valueOf(r);
-                    sb.append(i).append('=').append(v.equals("-10011") || v.equals("-2147482645") || v.equals("65535") ? "-" : v).append(i < 5 ? " " : "");
-                } catch (Throwable t) { sb.append(i).append("=?").append(i < 5 ? " " : ""); }
-            }
-            sb.append("] ");
-        }
-        return sb.toString().trim();
-    }
     private final java.util.Map<String, Integer> seatEvtFlips = new java.util.concurrent.ConcurrentHashMap<>();   // ★832 2초마다 0↔1 흔들리는 이벤트(COMMAND_AREA_DEPUTY) 거르기
     private final java.util.Set<String> seatEvtNoisy = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private long seatEvtWin = 0;   // ★831 belt_rem_pass/rl/rc/rr 마지막 값
@@ -13514,12 +13529,6 @@ public class SnifferService extends Service {
                 String rk = featureName.equals("SAFETY_BELT_LR2_REMIND_STATUS") ? "belt_rem_rl" : featureName.equals("SAFETY_BELT_MR2_REMIND_STATUS") ? "belt_rem_rc"
                         : featureName.equals("SAFETY_BELT_RR2_REMIND_STATUS") ? "belt_rem_rr" : featureName.equals("SAFETY_BELT_RR_REMIND_STATUS") ? "belt_rem_pass" : null;
                 if (rk != null) { beltRem.put(rk, intVal); if (relay != null) relay.putStatus(rk, intVal); }
-                // ★845 뒷좌석 3자리 착좌 판정 — 자리는 featureId 숫자로(이름표는 가운데·오른쪽이 바뀌어 있음)
-                int seat = SeatOccupancy.seatOf(featureId);
-                if (seat >= 0) {
-                    seatOcc.onRemind(seat, intVal, new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(new java.util.Date()));
-                    seatOcc.setBeltRaw(beltRawNow());
-                }
             }
             // ★v115 ICC(ACC) 오프 효과음 — subai 방식: ADAS_ACC_MODE(852492340) 이벤트로 감지.
             if (featureId == 852492340) handleAccMode(intVal);

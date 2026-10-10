@@ -54,6 +54,14 @@ public final class SentryAuth {
         return r == 0;
     }
 
+    // ★헤드유닛 자신의 녹화 보기 화면(SentryViewerActivity)용 — 릴레이가 자기 K로 권한 값을 만든다. 공유판은 /sentry/*에 권한 값이 있어야 열린다
+    public static String selfGrantQuery(String key, String vin, long nowMs) {
+        if (key == null || key.isEmpty() || vin == null || vin.isEmpty()) return null;
+        long sgx = nowMs + 3_300_000L;
+        String sg = hmacHex(key, grantMessage(vin, sgx));
+        return sg == null ? null : "sgx=" + sgx + "&sg=" + sg;
+    }
+
     // 주소에 이어 붙일 값(검증을 통과한 값만 되돌려 쓴다 — 숫자·16진만이라 주입 위험 없음)
     static String grantQuery(String sgx, String sg) {
         return "&sgx=" + sgx + "&sg=" + sg.toLowerCase(java.util.Locale.US);

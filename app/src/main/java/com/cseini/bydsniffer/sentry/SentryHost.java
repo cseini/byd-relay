@@ -17,6 +17,7 @@ public interface SentryHost {
     boolean rtcActive();                       // 실시간 보기(CAMRTC) 중 — 센트리는 양보
     boolean detectActive();                    // 다른 camDetect(앱 근접 감지 등) 중 — 센트리는 PAUSED
     boolean phoneNearFresh();                  // 주 사용권 폰 근접(15분 신선) — pause_when_phone_near 게이트
+    default boolean conservativeRetry() { return false; }   // 씨라7: 카메라(점유형) 열기가 실패하면 1·2·4·8·15분 간격으로만 다시 시도(다른 카메라 앱을 흔들지 않게)
     boolean lowVoltage();                      // 12V 저전압 지속(상시생존의 sustainedLow) — 센트리도 멈춤
     default boolean camOff() { return false; }   // 앱 설정에서 카메라 기능을 꺼 둠(cam_off) — 센트리는 카메라를 못 쓰므로 IDLE로 쉰다(켜질 때까지 1분마다 무장 시도·실패 로그가 쌓이지 않게)
     default int batteryPct() { return -1; }
