@@ -164,4 +164,19 @@ public class SentryHttpTest {
         assertTrue(web.contains("/sentry/web?date=2026-10-04" + g));
         assertTrue(web.contains("/sentry/web?date=2026-10-06" + g));
     }
+
+    @Test
+    public void isLoopback_onlyThisDeviceIsLocal() {
+        assertTrue(SentryHttp.isLoopback("127.0.0.1"));
+        assertTrue(SentryHttp.isLoopback("127.0.1.1"));
+        assertTrue(SentryHttp.isLoopback("::1"));
+        assertTrue(SentryHttp.isLoopback("::ffff:127.0.0.1"));
+        assertTrue(SentryHttp.isLoopback(" 127.0.0.1 "));
+        assertFalse(SentryHttp.isLoopback("192.168.43.2"));   // 헤드유닛 핫스팟에 붙은 폰
+        assertFalse(SentryHttp.isLoopback("10.0.0.5"));
+        assertFalse(SentryHttp.isLoopback("::ffff:192.168.1.7"));
+        assertFalse(SentryHttp.isLoopback("1.127.0.0.1"));
+        assertFalse(SentryHttp.isLoopback(null));
+        assertFalse(SentryHttp.isLoopback(""));
+    }
 }

@@ -130,6 +130,11 @@
                     <Button android:id="@+id/autostartTargetsButton" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:layout_marginStart="6dp"
                         android:text="해제 대상 앱" android:textSize="15sp" android:textColor="#B8C0CC" android:textAllCaps="false" android:background="@drawable/bg_btn" />
                 </LinearLayout>
+                <!-- ★872 링크락 런처 사용(운영자판 먼저) -->
+                <Button android:id="@+id/launcherButton" android:layout_width="match_parent" android:layout_height="60dp" android:layout_marginBottom="6dp"
+                    android:text="링크락 런처 사용: 꺼짐" android:textSize="15sp" android:textColor="#B8C0CC" android:textAllCaps="false" android:background="@drawable/bg_btn" android:visibility="gone" />
+                <TextView android:id="@+id/launcherDesc" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="12dp" android:visibility="gone"
+                    android:text="켜면 링크락 런처를 받아 헤드유닛 홈으로 씁니다. 끄면 순정 홈으로 되돌리고 지웁니다. P단이나 시동을 끈 상태에서만 바뀝니다." android:textSize="13sp" android:textColor="#8A93A2" />
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="앱 업데이트·재부팅 뒤 자동 시작이 막히면 눌러 해제합니다. '해제 대상 앱'에서 자동 해제할 앱을 고릅니다." android:textSize="13sp" android:textColor="#8A93A2" android:layout_marginTop="8dp" />
 
             </LinearLayout>

@@ -29,13 +29,21 @@ public final class SentryHttp {
 
     public static boolean handles(String uri) { return uri != null && uri.startsWith("/sentry/"); }
 
+    // 같은 기기 안(루프백)에서 온 요청인가 — 링크락 런처 WebView(127.0.0.1)용. ::1·::ffff:127.0.0.1도 같은 기기다
+    static boolean isLoopback(String ip) {
+        if (ip == null) return false;
+        String s = ip.trim().toLowerCase(Locale.US);
+        if (s.startsWith("::ffff:")) s = s.substring(7);
+        return s.equals("::1") || s.equals("0:0:0:0:0:0:0:1") || s.equals("localhost") || s.startsWith("127.");
+    }
+
     public static Response serve(IHTTPSession session) {
         String uri = session.getUri();
         Method method = session.getMethod();
         SentryManager m = SentryManager.get();
         try {
             String grantQs = "";
-            if (m.lanAuthRequired()) {   // ★공유판: 폰이 페어키로 만든 권한 값(?sgx=&sg=)이 있어야 목록·썸네일·영상·설정 전부 열린다
+            if (m.lanAuthRequired() && !isLoopback(session.getRemoteIpAddress())) {   // ★공유판: 폰이 페어키로 만든 권한 값(?sgx=&sg=)이 있어야 목록·썸네일·영상·설정 전부 열린다. 같은 헤드유닛(127.0.0.1)의 링크락 런처는 권한 값 없이 허용(운영자 10-11 "로컬 허용")
                 Map<String, String> gq = session.getParms();
                 String sgx = gq.get("sgx"), sg = gq.get("sg");
                 if (sgx == null || sg == null || !m.verifyGrant(sgx, sg)) return text(Response.Status.UNAUTHORIZED, "grant");
@@ -155,7 +163,21 @@ public final class SentryHttp {
             if (!SentryIndex.isValidId(id)) return text(Response.Status.BAD_REQUEST, "id");
             SentryIndex.EventMeta meta = ix.read(id);
             if (meta == null || meta.segments.isEmpty()) return text(Response.Status.NOT_FOUND, "녹화 없음");
-            return html(SentryPlayPage.buildPlayPage(meta, "1".equals(q.get("autoplay")), grantQs));
+            String playHtml = SentryPlayPage.buildPlayPage(meta, "1".equals(q.get("autoplay")), grantQs);
+            return html("1".equals(q.get("ui")) ? SentryUiPage.decoratePlay(playHtml, id, grantQs) : playHtml);   // ui=1 — 런처 화면에서 들어옴: 위에 "← 목록"
+        }
+
+        // 헤드유닛 런처용 화면(운영자 10-11): 달력+썸네일 그리드, [전체|즐겨찾기]. 운영자 도구 링크는 없다
+        if ("/sentry/ui".equals(uri) || "/sentry/".equals(uri)) {
+            String date = q.get("date");
+            if (date == null || date.isEmpty()) date = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+            if (!DATE.matcher(date).matches()) return text(Response.Status.BAD_REQUEST, "date");
+            boolean fav = "1".equals(q.get("fav"));
+            java.util.Map<Integer, Integer> calDays = new java.util.TreeMap<>();
+            org.json.JSONObject cj = ix.calendarJson(date.substring(0, 7)).optJSONObject("days");
+            if (cj != null) for (java.util.Iterator<String> it = cj.keys(); it.hasNext(); ) { String k = it.next(); calDays.put(Integer.parseInt(k), cj.optInt(k)); }
+            List<SentryIndex.EventMeta> evs = fav ? recentFavorites(ix, 90, 120) : ix.listDate(date, false);
+            return html(SentryUiPage.build(date, evs, grantQs, calDays, fav, new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date())));
         }
 
         if ("/sentry/web".equals(uri)) {
@@ -169,6 +191,18 @@ public final class SentryHttp {
         }
 
         return text(Response.Status.NOT_FOUND, "not found");
+    }
+
+    // 즐겨찾기 모아 보기 — 최근 maxDays일 안에서 즐겨찾기한 이벤트를 최신순으로 limit개까지(날짜별 폴더를 하나씩 본다)
+    private static List<SentryIndex.EventMeta> recentFavorites(SentryIndex ix, int maxDays, int limit) {
+        List<SentryIndex.EventMeta> out = new java.util.ArrayList<>();
+        SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        java.util.Calendar c = java.util.Calendar.getInstance();
+        for (int i = 0; i < maxDays && out.size() < limit; i++) {
+            out.addAll(ix.listDate(f.format(c.getTime()), true));
+            c.add(java.util.Calendar.DAY_OF_MONTH, -1);
+        }
+        return out.size() > limit ? out.subList(0, limit) : out;
     }
 
     private static Response servePost(IHTTPSession session, SentryManager m, String uri) throws Exception {

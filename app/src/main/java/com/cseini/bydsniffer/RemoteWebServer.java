@@ -171,8 +171,10 @@ final class RemoteWebServer extends NanoHTTPD {
     @Override
     public Response serve(IHTTPSession session) {
         // ★560 LAN 요청 수신 = 폰이 같은 망에 있다는 증거. 명령이 이 경로로 직접 오므로 워커 폴링을 늦춘다.
-        try { host.noteLan(); } catch (Throwable ignored) {}
+        //   ★871 같은 헤드유닛 안(링크락 런처·센트리 보기)의 루프백 요청은 폰이 아니다 — 세면 집 밖 원격 명령 폴링이 늦어진다(센트리 세션 요청)
         String remote = session.getRemoteIpAddress();
+        boolean loopback = remote != null && (remote.startsWith("127.") || "::1".equals(remote) || "0:0:0:0:0:0:0:1".equals(remote));
+        if (!loopback) try { host.noteLan(); } catch (Throwable ignored) {}
         if (!isPrivate(remote)) return text(Response.Status.FORBIDDEN, "private network only");
         String uri = session.getUri();
         if (com.cseini.bydsniffer.sentry.SentryHttp.handles(uri)) return com.cseini.bydsniffer.sentry.SentryHttp.serve(session);   // ★센트리 /sentry/* (GET·HEAD·POST 전부 — docs/SENTRY-DESIGN.md 훅 v2)
@@ -194,9 +196,9 @@ final class RemoteWebServer extends NanoHTTPD {
                 if ("/cluster/state".equals(uri)) return clusterState();
                 if ("/cluster/cam.mjpg".equals(uri)) return camMjpeg("1".equals(session.getParms().get("keep")));   // ★729 keep=1 = 폰이 미리 열어 두는 연결
                 if ("/cluster/cfg".equals(uri)) { Response r = json(host.clusterCfgJson()); r.addHeader("Cache-Control", "no-store"); return r; }   // ★619
-                if ("/cluster/tile.jpg".equals(uri)) {   // ★619 ?side=2|4|8
+                if ("/cluster/tile.jpg".equals(uri)) {   // ★619 ?side=2|4|8 · ★871 1=전방(링크락 런처 카메라 띠, 운영자 10-11)
                     int sd = 0; try { sd = Integer.parseInt(session.getParms().get("side")); } catch (Throwable ignored) {}
-                    byte[] jpg = (sd == 2 || sd == 4 || sd == 8) ? host.clusterTile(sd) : null;
+                    byte[] jpg = (sd == 1 || sd == 2 || sd == 4 || sd == 8) ? host.clusterTile(sd) : null;
                     if (jpg == null) return text(Response.Status.SERVICE_UNAVAILABLE, "카메라 준비 안 됨");
                     Response r = newFixedLengthResponse(Response.Status.OK, "image/jpeg", new java.io.ByteArrayInputStream(jpg), jpg.length);
                     r.addHeader("Cache-Control", "no-store"); return r;
