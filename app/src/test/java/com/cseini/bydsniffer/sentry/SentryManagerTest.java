@@ -291,4 +291,19 @@ public class SentryManagerTest {
         assertEquals("ssum:3:0", SentryManager.summaryEvent(3, -5));
         assertTrue(SentryManager.summaryEvent(999, 99999).length() <= 32);
     }
+
+    @Test
+    public void contEpisodeDecision_newEpisodeAfterQuietGapAndMutedInsideCooldownOrOnEventChange() {
+        long q = SentryManager.CONT_EPISODE_QUIET_MS, cd = SentryManager.CONT_ALERT_COOLDOWN_MS;
+        // 처음 움직임: 새 에피소드, 알림 가능
+        assertEquals(1, SentryManager.contEpisodeDecision(100_000L, 0L, 0L, true, q, cd));
+        // 이어지는 움직임(15초 안, 같은 이벤트): 새로 시작 안 함
+        assertEquals(0, SentryManager.contEpisodeDecision(105_000L, 100_000L, 100_000L, false, q, cd));
+        // 15초 넘게 잠잠했다 다시: 새 에피소드, 마지막 알림 60초 지났으면 알림 가능
+        assertEquals(1, SentryManager.contEpisodeDecision(200_000L, 100_000L, 100_000L, false, q, cd));
+        // 마지막 알림에서 60초 안이면 새 에피소드라도 알림 안 함
+        assertEquals(2, SentryManager.contEpisodeDecision(120_000L, 100_000L, 105_000L, false, q, cd));
+        // 움직임이 계속되는 중 이벤트가 바뀜(파일 길이로 끊김): 표시만 남기고 알림 안 함
+        assertEquals(2, SentryManager.contEpisodeDecision(105_000L, 100_000L, 100_000L, true, q, cd));
+    }
 }

@@ -515,18 +515,22 @@ public class SentrySettingsTest {
 
 
     @Test
-    public void internalOnly_forcesInternalStorageWhateverIsSent() throws JSONException {
+    public void internalOnly_keepsChosenStorageAsMoveTargetAndCapsInternalLimit() throws JSONException {
         JSONObject sd = new JSONObject(); sd.put("storage", "sd");
         assertEquals("sd", SentrySettings.fromJson(sd).storage);
+        assertEquals(50000, SentrySettings.clampLimitMb(100000, 50000, true));   // 일반: 내장 한도를 사용자가 크게 정하면 그대로(여유까지)
         SentrySettings.setInternalOnly(true);
         try {
-            assertEquals("internal", SentrySettings.fromJson(sd).storage);
             JSONObject usb = new JSONObject(); usb.put("storage", "usb");
-            assertEquals("internal", SentrySettings.fromJson(usb).storage);
+            assertEquals("씨라7 시험판에서도 고른 값은 옮길 곳으로 남는다", "usb", SentrySettings.fromJson(usb).storage);
+            assertEquals("내장 임시 저장은 외장 한도를 크게 정해도 3GB까지만", 3072, SentrySettings.clampLimitMb(100000, 50000, true));
+            assertEquals(3072, SentrySettings.clampLimitMb(0, 50000, true));
+            assertEquals("외장 루트의 한도는 그대로", 50000, SentrySettings.clampLimitMb(100000, 50000, false));
+            assertEquals("내장 여유가 적으면 그만큼", 1500, SentrySettings.clampLimitMb(100000, 1500, true));
         } finally {
             SentrySettings.setInternalOnly(false);
         }
-        assertEquals("sd", SentrySettings.fromJson(sd).storage);
+        assertEquals(50000, SentrySettings.clampLimitMb(100000, 50000, true));
     }
 
     @Test
@@ -592,5 +596,36 @@ public class SentrySettingsTest {
         SentrySettings s = SentrySettings.fromJson(off);
         assertFalse(s.summaryAnnounce);
         assertFalse(s.toJson().getBoolean("summary_announce"));
+    }
+
+    @Test
+    public void continuousEventS_defaultsTo600AndRoundsTo30WithinRange() throws JSONException {
+        assertEquals(600, SentrySettings.fromJson(new JSONObject()).continuousEventS);
+        assertEquals(600_000L, SentrySettings.fromJson(new JSONObject()).continuousEventMs());
+        int[][] cases = {{30, 30}, {44, 30}, {45, 60}, {90, 90}, {300, 300}, {600, 600}, {615, 600}, {1800, 600}, {5000, 600}, {10, 30}, {0, 30}};
+        for (int[] c : cases) {
+            JSONObject o = new JSONObject(); o.put("continuous_event_s", c[0]);
+            assertEquals("입력 " + c[0], c[1], SentrySettings.fromJson(o).continuousEventS);
+        }
+        JSONObject o = new JSONObject(); o.put("continuous_event_s", 30);
+        assertEquals(30, SentrySettings.fromJson(o).toJson().getInt("continuous_event_s"));
+        JSONObject bad = new JSONObject(); bad.put("continuous_event_s", "abc");
+        assertEquals(600, SentrySettings.fromJson(bad).continuousEventS);   // 모르는 값은 기본
+    }
+
+    @Test
+    public void continuousDetect_defaultsOffAndNeedsDetectorOnlyWhenOnOrMotionOnly() throws JSONException {
+        SentrySettings d = SentrySettings.fromJson(new JSONObject());
+        assertFalse(d.continuousDetect);
+        assertFalse("연속 녹화 기본은 감지기를 만들지 않는다", d.needsMotionDetector());
+        JSONObject on = new JSONObject(); on.put("continuous_detect", true);
+        SentrySettings o = SentrySettings.fromJson(on);
+        assertTrue(o.continuousDetect && o.needsMotionDetector());
+        assertTrue(o.toJson().getBoolean("continuous_detect"));
+        JSONObject mo = new JSONObject(); mo.put("motion_only", true);
+        assertTrue("움직임 녹화는 늘 감지기가 필요", SentrySettings.fromJson(mo).needsMotionDetector());
+        // 켜고 끄면 세션을 다시 만든다
+        assertTrue(SentryManager.needRestart(d, o));
+        assertFalse(SentryManager.needRestart(d, d));
     }
 }
