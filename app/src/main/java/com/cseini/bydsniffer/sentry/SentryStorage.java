@@ -78,6 +78,7 @@ public final class SentryStorage {
     //   바뀌었으면 "이전 단계 이전경로" 문자열, 아니면 null
     public synchronized String repinIfFallback() {
         Resolved r = cached;
+        if (SentrySettings.isInternalOnly()) return null;
         if (r == null || !shouldRepin(pinned, settings.storage, r.tier, !removableMounted().isEmpty())) return null;
         Resolved n = resolve();
         if (n.root.equals(r.root)) return null;
@@ -131,6 +132,7 @@ public final class SentryStorage {
 
     // 외장을 골랐는데 공용 폴더가 아닌 곳(앱전용·내부)에 쓰고 있으면 true
     public boolean fallback() {
+        if (SentrySettings.isInternalOnly()) return false;   // 씨라7 시험판은 내장 임시 저장이 정상 동작이라 폴백이 아니다
         return !"internal".equals(settings.storage) && !"public".equals(tier());
     }
 
@@ -149,13 +151,10 @@ public final class SentryStorage {
             o.put("limitMb", limit);
             JSONArray vols = new JSONArray();
             vols.put(internalJson());
-            if (SentrySettings.isInternalOnly()) {   // 씨라7 시험판: 내장만 — 앱이 SD·USB 선택지를 보이지 않게 목록에서 뺀다
-                o.put("internalOnly", true);
-            } else {
-                List<Vol> rem = removableMounted();
-                vols.put(removableJson("sd", rem.size() > 0 ? rem.get(0) : null, "sd".equals(settings.storage)));
-                vols.put(removableJson("usb", rem.size() > 1 ? rem.get(1) : null, "usb".equals(settings.storage)));
-            }
+            if (SentrySettings.isInternalOnly()) o.put("staging", true);   // 씨라7 시험판: 녹화는 늘 내장, selected는 시동 켜고 옮길 곳
+            List<Vol> rem = removableMounted();
+            vols.put(removableJson("sd", rem.size() > 0 ? rem.get(0) : null, "sd".equals(settings.storage)));
+            vols.put(removableJson("usb", rem.size() > 1 ? rem.get(1) : null, "usb".equals(settings.storage)));
             o.put("volumes", vols);
             JSONObject est = new JSONObject();
             est.put("hd", calcEstimateHours(limit, kbpsFor("hd")));
@@ -255,14 +254,31 @@ public final class SentryStorage {
     // 외장(SD·USB)을 골랐는데 시동 끈 직후 외장이 안 붙어 내장·앱 전용 폴더에 녹화된 영상은, 외장이 다시 붙어도 거기 남아 내장 용량을 차지했다.
     // 새 녹화는 지금처럼 외장에 바로 쓰고, 내장에 남은 것만 천천히 외장으로 옮긴다.
 
-    // 외장(공용 폴더)에 쓰고 있어서 옮겨 올 수 있는 상태인가
-    public synchronized boolean migrationTargetReady() {
-        return !"internal".equals(settings.storage) && "public".equals(tier());
+    // 옮길 곳(외장 공용 폴더) — 일반: 외장에 쓰고 있으면 지금 루트. 씨라7 시험판: 사용자가 고른 외장(sd·usb)이 붙어 있고 쓰기 되면 그 공용 폴더. 없으면 null
+    public synchronized File migrationDestRoot() {
+        if (SentrySettings.isInternalOnly()) {
+            String sel = settings.storage;
+            if ("internal".equals(sel)) return null;
+            List<Vol> rem = removableMounted();
+            int i = "sd".equals(sel) ? 0 : 1;
+            if (rem.size() <= i) return null;
+            File pub = publicDir(rem.get(i));
+            return probeWritable(pub) ? pub : null;
+        }
+        return !"internal".equals(settings.storage) && "public".equals(tier()) ? root() : null;
     }
 
-    // 폴백 때 쓴 내장 단계 루트(앱 전용 외부 폴더·앱 내부 폴더) 중 영상이 남아 있을 수 있는 곳
-    public synchronized List<File> leftoverRoots() {
-        File cur = root();
+    // 외장 한도 계산 — 그 루트의 남은 용량과 이미 쓴 양으로 정한 한도(MB)
+    public long limitMbOf(File root) {
+        long used = dirSize(root) / MB;
+        return SentrySettings.clampLimitMb(settings.limitMb, freeMb(root) + used, isInternalRoot(root));
+    }
+
+    public long usedMbOf(File root) { return dirSize(root) / MB; }
+
+    // 옮겨 올 내장 단계 루트(앱 전용 외부 폴더·앱 내부 폴더) 중 영상이 남아 있을 수 있는 곳 — dest(옮길 곳)는 뺀다. dest가 null이면 지금 루트도 포함(씨라7 시험판의 임시 저장 루트)
+    public synchronized List<File> leftoverRoots(File dest) {
+        File cur = SentrySettings.isInternalOnly() ? dest : root();
         List<File> out = new ArrayList<>();
         File ext = ctx.getExternalFilesDir(null);
         if (ext != null) out.add(new File(ext, "Sentry"));
@@ -276,9 +292,9 @@ public final class SentryStorage {
     }
 
     // 이 이벤트가 내장 단계에 남아 있으면 그 폴더, 아니면 null
-    public synchronized File leftoverDir(String eventId) {
+    public synchronized File leftoverDir(String eventId, File dest) {
         String rel = eventRel(eventId);
-        for (File r : leftoverRoots()) {
+        for (File r : leftoverRoots(dest)) {
             File d = new File(r, rel);
             if (d.isDirectory()) return d;
         }
@@ -465,6 +481,10 @@ public final class SentryStorage {
 
     private Resolved resolve() {
         String sel = settings.storage;
+        if (SentrySettings.isInternalOnly()) {   // 씨라7 시험판: 녹화는 늘 내장(주차 중 USB 전원이 내려가므로) — 외장은 시동 켠 뒤 옮길 곳
+            resolveDiag = "씨라7 시험판 — 내장에 임시 저장, 옮길 곳=" + sel;
+            return new Resolved(internalDir(), "internal");
+        }
         if (!"internal".equals(sel)) {
             StringBuilder d = new StringBuilder();
             List<Vol> rem = removableMounted();

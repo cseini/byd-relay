@@ -2300,6 +2300,7 @@ public class SnifferService extends Service {
             // ★654 시동 OFF 순간 저장장치 관찰 시작(sd_off_ts는 동기 저장 — D5는 몇 초 뒤 강제종료되므로 +0분은 즉시 찍고 나머지는 앵커루프가 이어감)
             RelayClient.netGapLog = m -> postToD1("NETGAP", m);   // ★726 서버 끊김이 잠 때문인지 인터넷·서버 때문인지 한 줄
             relay.onIgnitionOff = () -> {
+                bsdYoloPreload(false);   // ★868
                 SentryManager.get().onIgnition(false);   // ★센트리 — OFF +20초에 게이트 평가(앞 문장이 예외를 던져도 불리도록 첫 줄)
                 setSplitOwned(false);   // ★724 시동 끄면 이번에 띄운 분할 기억도 끝
                 if (prefs != null) prefs.edit().putLong("sd_off_ts", System.currentTimeMillis()).putInt("sd_done", 0).apply();
@@ -2313,6 +2314,7 @@ public class SnifferService extends Service {
             };
             relay.onIgnitionOn = () -> {
                 SentryManager.get().onIgnition(true);   // ★센트리 — 즉시 중지(앞 문장이 예외를 던져도 불리도록 첫 줄)
+                mainHandler.postDelayed(() -> { if (relay != null && relay.ignitionState() == 1) bsdYoloPreload(true); }, 20000);   // ★868 헤드유닛이 다 뜬 뒤 BSD용 YOLO 미리 불러 두기
                 setSplitOwned(false);   // ★724 새 시동 — 지난 시동에 띄운 분할은 잊는다(시작 앱이 다시 띄우면 그때 다시 지킴)
                 mainHandler.postDelayed(this::maybeUpdatePrompt, 20000); approachLaunchDone = false; maybeApproachLaunch();
                 if (prefs != null) prefs.edit().remove("sd_off_ts").putInt("sd_done", 0).apply();   // ★654 OFF 관찰 종료
@@ -4825,6 +4827,21 @@ public class SnifferService extends Service {
     // ★센트리 "사람·차량만"(10-07 YOLO11n로 되살림) — 4칸 각각에서 사람·차량 최고 점수를 재서 칸 중 최대를 돌려준다. 서비스 전체 잠금(this)을 잡지 않는다(추론 1초 안팎)
     private com.cseini.motiondetect.YoloDetector sentryYolo;
     private final Object sentryYoloLock = new Object();
+    // ★868 BSD 전용 YOLO(운영자 10-10 "깜빡이 때 BSD 방향 차량 객체인식 알림") — 센트리 것은 센트리가 멈출 때 내려놓아 주행 중 첫 BSD마다 다시 불러왔다.
+    //   시동 켜면 미리 불러 두고 끄면 내려놓는다(주차 중엔 센트리가 쓴다). 운영자판 돌핀만(BSD 인식 측정 BsdVision과 같은 범위).
+    private com.cseini.motiondetect.YoloDetector bsdYolo;
+    private final Object bsdYoloLock = new Object();
+    private void bsdYoloPreload(boolean on) {
+        if (!BuildConfig.IS_OPERATOR || DiLink5Support.isDiLink5()) return;
+        new Thread(() -> {
+            synchronized (bsdYoloLock) {
+                try {
+                    if (on && bsdYolo == null) { long t0 = System.currentTimeMillis(); bsdYolo = new com.cseini.motiondetect.YoloDetector(getApplicationContext(), com.cseini.motiondetect.YoloDetector.MODEL_320_INT8); postToD1("BSDVISION", "BSD용 YOLO(320 정수) 미리 불러옴 " + (System.currentTimeMillis() - t0) + "ms 준비=" + bsdYolo.isReady()); }
+                    else if (!on && bsdYolo != null) { bsdYolo.close(); bsdYolo = null; }
+                } catch (Throwable t) { postToD1("BSDVISION", "BSD용 YOLO " + (on ? "불러오기" : "내려놓기") + " 실패 " + t.getClass().getSimpleName()); }
+            }
+        }, "bsd-yolo").start();
+    }
     private float[] sentryObjectScores(byte[] nv21, int w, int h) {
         synchronized (sentryYoloLock) {
             try {
@@ -4995,6 +5012,8 @@ public class SnifferService extends Service {
                     d5q = new com.overdrive.app.camera.dilink5.FastCamQuadBackend();
                     boolean qok = d5q.start(getApplicationContext(), 15, (nv21, w, h) -> {
                         meta[0] = w; meta[1] = h; latest[0] = nv21; fc[0]++;
+                        // ★867 씨라7도 센트리 녹화 중 실시간 보기가 이 쿼드를 나눠 쓴다(돌핀 ★791과 같게, 운영자 10-10) — nv21은 합성마다 새 배열이라 그대로 넘겨도 안전
+                        if (sentryMode || sentryTapsDetect) { sentryTapW = w; sentryTapH = h; sentryTapFrame = nv21; sentryTapMs = System.currentTimeMillis(); }
                         detectFrameCount++; detectLastFrameMs = System.currentTimeMillis();
                     }, (t, m) -> postToD1("CAMDETECT", m));
                     if (relay != null) relay.putStatus("cam_state", "⑤d5quad=" + qok + " v" + view + " @" + (System.currentTimeMillis() % 100000));
@@ -5900,7 +5919,7 @@ public class SnifferService extends Service {
     private volatile int detectViewNum = -1;
     private boolean canTapDetect() { return detectActive && !detectSentryMode && !detectDriveMode && detectAvm && detectViewNum == 5 && !DiLink5Support.isDiLink5(); }
     private volatile boolean rtcTapsSentry = false;   // 지금 실시간 보기가 센트리 프레임을 받아 쓰는 중 — 이때만 센트리 게이트가 실시간 보기를 막지 않는다
-    private boolean sentryLiveCoexist() { return !DiLink5Support.isDiLink5() && (prefs == null || prefs.getBoolean("sentry_live_coexist", true)); }
+    private boolean sentryLiveCoexist() { return prefs == null || prefs.getBoolean("sentry_live_coexist", true); }   // ★867 씨라7 제외 해제 — 실시간 보기가 센트리 쿼드를 나눠 쓰면 캡처 데몬을 껐다 켜지 않는다
     private static final String CAM_OFF_MSG = "카메라 기능이 꺼져 있습니다(앱 설정에서 켜기)";
     private void stopAllCameraUse() {
         try { detectStop(); } catch (Throwable ignored) {}
@@ -6695,7 +6714,7 @@ public class SnifferService extends Service {
                 postToD1("CAMRTC", "answer 전송 sid=" + sid + " cands=[ " + cands + "]");
 
                 // 9) 카메라 열고 프레임을 VideoSource로 주입
-                if (DiLink5Support.isDiLink5()) {
+                if (DiLink5Support.isDiLink5() && !keepSentry) {   // ★867 씨라7도 센트리 녹화 중이면 아래 keepSentry(센트리 프레임 나눠 쓰기)로
                     // ★DiLink5(씨라7): bydauto 카메라(bmmcamera) 없음 → QCarCam 백엔드. UYVY→GL텍스처(nativeBindLatestFrame)→glReadPixels→NV21을 latest[0]에 공급([[byd-dilink5-qcarcam-port]]).
                     com.overdrive.app.camera.dilink5.DiLink5QCarCamBackend.FrameSink d5sink =
                             (nv21, w, h) -> { meta[0] = w; meta[1] = h; meta[2] = 0; meta[3] = nv21.length; latest[0] = nv21; };
@@ -12074,7 +12093,7 @@ public class SnifferService extends Service {
     //   ① 같은 기기가 60초 안에 연결중→끊김을 5번 이상 반복하면 그 기기의 오디오 두 프로필만 disconnect(차의 재연결 폭풍 멈추기, 5분에 한 번).
     //   ② 시동 ON·주 사용권 폰 근접인데 오디오가 하나도 안 붙어 있으면 45초 뒤부터 마지막으로 붙었던 기기에 connect(20초 간격, 최대 5번).
     //   어댑터·연결정책은 건드리지 않는다(비콘·워치키는 같은 어댑터). 스위치 bt_audio_heal: 씨라7 기본 켬, 그 밖에는 꺼짐, RAW {"btAudioHeal":true|false}.
-    private boolean btHealOn() { return prefs != null && prefs.getBoolean("bt_audio_heal", IS_D5); }
+    private boolean btHealOn() { return prefs != null && prefs.getBoolean("bt_audio_heal", IS_D5 && BuildConfig.IS_OPERATOR); }   // ★868 공유판은 기본 꺼짐(운영자 10-08 "운영자판까지만" — d5 공유판 줄과 같게, 씨라7 공유판을 운영자판 소스로 옮기며)
     private final java.util.Map<String, java.util.ArrayDeque<Long>> btFailTimes = new java.util.HashMap<>();
     private volatile long btHealBreakAt = 0, btHealSince = 0, btHealLastTry = 0;
     private volatile int btHealTries = 0;
@@ -13920,7 +13939,13 @@ public class SnifferService extends Service {
                 }
             }
             @Override public float[][] yoloBoxes(byte[] view, float minScore) {
-                float[][] all = sentryObjectDetect(view, 320, 320, 0, 0, 320, 320, minScore);
+                float[][] all;
+                synchronized (bsdYoloLock) {   // ★868 시동 중엔 미리 불러 둔 BSD 전용 인식기 — 없으면(시동 꺼짐 등) 예전처럼 센트리 것
+                    if (bsdYolo != null && bsdYolo.isReady()) {
+                        all = bsdYolo.detect(view, 320, 320, 0, 0, 320, 320, minScore);
+                        postToD1("BSDVISION", "YOLO 순수 추론 " + bsdYolo.lastInferMs() + "ms(BSD 전용, 입력 320 정수)");
+                    } else all = sentryObjectDetect(view, 320, 320, 0, 0, 320, 320, minScore);
+                }
                 if (all == null) return null;
                 java.util.ArrayList<float[]> v = new java.util.ArrayList<>();
                 for (float[] b : all) if (b[0] == 1f) v.add(b);   // 차량(승용·이륜·버스·트럭)만

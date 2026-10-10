@@ -26,7 +26,7 @@ public final class SentrySettings {
             "time_limit_enabled", "time_mode", "time_from", "time_to",
             "safe_location_enabled", "hazard_on_motion", "screen_message",
             "sensitivity", "min_detect_s", "roi_enabled", "rois", "layout_map", "layout_flip",
-            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "when_full", "summary_announce", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
+            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "when_full", "summary_announce", "continuous_event_s", "continuous_detect", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
 
     private static final String[] STORAGES = {"internal", "sd", "usb"};
     private static final String[] RESOLUTIONS = {"hd", "fhd", "original"};
@@ -41,7 +41,8 @@ public final class SentrySettings {
 
     public final boolean enabled;
     public final boolean motionOnly;
-    // 씨라7(DiLink5) 시험판은 차량 내장 저장소만 쓴다(운영자 10-10 "차량내부저장장치만") — 앱이 어떤 값을 보내도 내장으로 고정. 릴레이 시작 때 SnifferService가 켠다.
+    // 씨라7(DiLink5) 시험판은 "주차 중엔 차량 내장에 녹화 → 시동 켜고 주행할 때 선택한 USB·SD로 옮기기"(운영자 10-10): 녹화는 늘 내장에 하고 storage는 사용자가 고른 옮길 곳(sd·usb)을 그대로 둔다.
+    // 내장 임시 저장 한도는 3GB로 막는다. 릴레이 시작 때 SnifferService가 켠다(이름은 처음 "내장만" 때 그대로).
     private static volatile boolean internalOnly;
     public static void setInternalOnly(boolean v) { internalOnly = v; }
     public static boolean isInternalOnly() { return internalOnly; }
@@ -55,6 +56,8 @@ public final class SentrySettings {
     public final String osdPos;
     public final boolean filterPerson;    // 움직임 감지 모드에서 "사람"이 있을 때만 이벤트·알림(기본 꺼짐, YOLO11n — 10-07 되살림)
     public final boolean filterVehicle;
+    public final int continuousEventS;    // 연속 녹화(motion_only=false) 때 이벤트(녹화 파일) 하나의 길이(초) — 30~600, 30초 단위, 기본 600(운영자 10-10, 최대 10분). 움직임 녹화에는 영향 없음
+    public final boolean continuousDetect; // 연속 녹화(motion_only=false) 중에도 움직임 감지·물체 판정을 표시용으로 돌림(기본 꺼짐 — CPU·발열) — 운영자 10-10. 녹화를 시작·끊는 데는 쓰지 않는다
     public final boolean summaryAnnounce; // 시동을 켤 때 릴레이 앱(헤드유닛)이 센트리 가동 요약을 음성 읽기+화면 문구로 안내(기본 켜짐) — 운영자 10-10 "음성 설정은 폰 앱 센트리 설정에, 기본 켜짐"
     public final String whenFull;         // 저장 공간이 가득 차면: overwrite(가장 오래된 것부터 자동 삭제, 기본) | stop(지우지 않고 녹화 중지 + 가득 차 가면 알림) — 운영자 10-10
     public final boolean objectDetect;    // 객체 인식(YOLO) 사용 — 끄면 YOLO를 아예 안 돌리고 예전처럼 움직임만으로 이벤트·알림(운영자 10-10, 앱 센트리 설정에서 사용자가 고름)
@@ -89,7 +92,7 @@ public final class SentrySettings {
     private SentrySettings(JSONObject o) {
         enabled = bool(o, "enabled", false);
         motionOnly = bool(o, "motion_only", false);
-        storage = internalOnly ? "internal" : pick(o, "storage", "internal", STORAGES);
+        storage = pick(o, "storage", "internal", STORAGES);   // 씨라7 시험판에선 "옮길 곳" — 녹화 위치는 SentryStorage가 늘 내장으로 해석한다
         int lim = num(o, "limit_mb", 0, 0, Integer.MAX_VALUE);
         limitMb = (lim > 0 && lim < 1000) ? 1000 : lim;
         resolution = internalOnly ? "hd" : pick(o, "resolution", "original", RESOLUTIONS);   // 씨라7 시험판: 인코더 부하를 줄이려 HD 고정
@@ -103,6 +106,8 @@ public final class SentrySettings {
         filterVehicle = bool(o, "filter_vehicle", false);
         whenFull = pick(o, "when_full", "overwrite", WHEN_FULL);
         summaryAnnounce = bool(o, "summary_announce", true);
+        continuousEventS = roundTo30(num(o, "continuous_event_s", 600, 30, 600));
+        continuousDetect = bool(o, "continuous_detect", false);
         objectDetect = bool(o, "object_detect", true);
         detectPerson = bool(o, "detect_person", true);
         detectVehicle = bool(o, "detect_vehicle", true);
@@ -204,6 +209,8 @@ public final class SentrySettings {
             o.put("filter_vehicle", filterVehicle);
             o.put("when_full", whenFull);
             o.put("summary_announce", summaryAnnounce);
+            o.put("continuous_event_s", continuousEventS);
+            o.put("continuous_detect", continuousDetect);
             o.put("object_detect", objectDetect);
             o.put("detect_person", detectPerson);
             o.put("detect_vehicle", detectVehicle);
@@ -296,6 +303,14 @@ public final class SentrySettings {
 
     // 객체 인식 실제 사용 여부 — object_detect가 꺼졌거나 사람·차량이 둘 다 꺼졌으면 YOLO를 돌리지 않는다
     public boolean objectsOn() { return objectDetect && (detectPerson || detectVehicle); }
+    // 30초 단위로 맞춤(45→60, 44→30), 범위는 30~600
+    static int roundTo30(int v) { return Math.max(30, Math.min(600, Math.round(v / 30f) * 30)); }
+
+    // 움직임 감지기를 만들어야 하나 — 움직임 녹화이거나, 연속 녹화에서 표시용 감지를 켠 때
+    public boolean needsMotionDetector() { return motionOnly || continuousDetect; }
+
+    public long continuousEventMs() { return continuousEventS * 1000L; }
+
     public boolean whenFullStop() { return "stop".equals(whenFull); }
     public boolean personOn() { return objectsOn() && detectPerson; }
     public boolean vehicleOn() { return objectsOn() && detectVehicle; }
@@ -345,6 +360,7 @@ public final class SentrySettings {
         long v;
         if (wanted <= 0) v = Math.max(1000L, internal ? Math.min(freeMb / 2, INTERNAL_DEFAULT_LIMIT_MB) : freeMb / 2);
         else v = Math.max(1000L, Math.min((long) wanted, freeMb));
+        if (internal && internalOnly) v = Math.min(v, INTERNAL_DEFAULT_LIMIT_MB);   // 씨라7 임시 저장 — 외장 한도를 크게 정했어도 차량 내장은 3GB까지만
         return (int) Math.min(v, Integer.MAX_VALUE);
     }
 

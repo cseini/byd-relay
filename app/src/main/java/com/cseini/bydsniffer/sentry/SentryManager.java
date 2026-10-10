@@ -45,7 +45,6 @@ public final class SentryManager {
     private static final long ARM_DELAY_MS = 20_000L;       // 시동 OFF 뒤 첫 게이트 평가
     private static final long RECOVER_DELAY_MS = 5_000L;    // 재기동 복구
     private static final long SEG_MS = 60_000L;             // 조각 길이
-    private static final long EVENT_MS = 600_000L;          // 연속 녹화 이벤트 길이
     private static final long ORPHAN_MS = 10 * 60_000L;     // 고아 .part 기준
     private static final long RESTART_GAP_MS = 1_500L;      // 설정 변경 재시작 때 stop→start 간격
     private static final long REEVAL_DELAY_MS = 3_000L;    // reevaluate() 합치기 지연 — 호스트 stop→start 연속 호출이 가라앉은 뒤 게이트를 본다
@@ -247,7 +246,7 @@ public final class SentryManager {
             post(() -> saveThumb(tid, copy, w, fh));
         }
         e.feed(nv21, nowMs);
-        if (st == State.ARMED && nowMs - lastBaseCapture >= BASE_EVERY_MS && settings.objectsOn()) captureBase(nv21, nowMs);   // 객체 인식을 껐으면 기준 화면 복사(7MB·3초마다)도 안 한다
+        if ((st == State.ARMED || (st == State.RECORDING && !pipeMotionOnly && motion != null)) && nowMs - lastBaseCapture >= BASE_EVERY_MS && settings.objectsOn()) captureBase(nv21, nowMs);   // 연속 녹화 표시용 감지는 녹화 중에도 기준 화면을 갱신   // 객체 인식을 껐으면 기준 화면 복사(7MB·3초마다)도 안 한다
         long due = classifyDue;
         if (due != 0 && nowMs >= due && st == State.RECORDING && classifyId != null && classifyId.equals(eventId)) {   // 이벤트 중 재판정 시각이 됐으면 이 프레임으로
             classifyDue = 0;
@@ -268,6 +267,7 @@ public final class SentryManager {
         if (motionTrig) {
             if (state == State.RECORDING) {
                 lastMotionElapsed = SystemClock.elapsedRealtime();
+                if (!pipeMotionOnly) onContinuousMotion(nv21, w, fh, lastMotionElapsed);   // 연속 녹화 중 표시용 감지
             } else if (state == State.ARMED && SystemClock.elapsedRealtime() >= objectRejectUntil && motionTrigPending.compareAndSet(false, true)) {
                 byte[] copy = nv21.clone();
                 post(() -> startMotionEvent(copy, w, fh));
@@ -968,7 +968,8 @@ public final class SentryManager {
                 || !a.fps.equals(b.fps) || a.bitrateKbps != b.bitrateKbps || a.motionOnly != b.motionOnly
                 || a.osdDatetime != b.osdDatetime || a.osdBattery != b.osdBattery || !a.osdPos.equals(b.osdPos)
                 || !java.util.Arrays.equals(a.layoutMap, b.layoutMap) || !java.util.Arrays.equals(a.layoutFlip, b.layoutFlip) || !a.cellViews.toString().equals(b.cellViews.toString())) return true;
-        if (b.motionOnly) {
+        if (a.continuousDetect != b.continuousDetect) return true;   // 감지기를 만들거나 없애야 한다
+        if (b.needsMotionDetector()) {
             return a.sensitivity != b.sensitivity || a.minDetectS != b.minDetectS || a.roiEnabled != b.roiEnabled
                     || a.shadowFilter != b.shadowFilter || a.lightChangeFilter != b.lightChangeFilter || a.prerollS != b.prerollS
                     || !String.valueOf(a.rois).equals(String.valueOf(b.rois));
@@ -1010,7 +1011,7 @@ public final class SentryManager {
         SentrySettings s = settings;
         String g = gate(s.enabled, hs.ignitionState(), hs.camOff(), hs.rtcActive(), hs.detectActive(),
                 s.timeAllows(System.currentTimeMillis()), pausedLoc, hs.lowVoltage(),
-                s.pauseWhenPhoneNear, hs.phoneNearFresh(), "internal".equals(s.storage) ? null : storageYield);
+                s.pauseWhenPhoneNear, hs.phoneNearFresh(), ("internal".equals(s.storage) || SentrySettings.isInternalOnly()) ? null : storageYield);
         if (g == null && s.whenFullStop() && spaceLevelCache >= 3) return "저장 공간 가득 — 녹화 중지";   // 지우지 않기를 골랐으니 영상을 지우거나 한도를 늘릴 때까지 쉰다(그때 자동 재개)
         return g;
     }
@@ -1076,7 +1077,7 @@ public final class SentryManager {
         final long t0 = SystemClock.elapsedRealtime();
         Object[] prep = ioCall("저장소 준비", IO_TIMEOUT_MS, () -> {
             SentryStorage ns = new SentryStorage(hs.context(), s);
-            boolean mounted = "internal".equals(s.storage) || ns.externalMounted();
+            boolean mounted = "internal".equals(s.storage) || SentrySettings.isInternalOnly() || ns.externalMounted();   // 씨라7 시험판은 내장에 쓰므로 외장을 기다리지 않는다
             ns.pin();   // 이벤트가 끝날 때까지 루트 고정 — 도중 재해석으로 조각이 갈라지는 것 방지(외장 미마운트면 여기서 내장으로 해석)
             return new Object[]{ns, mounted};
         }, null);
@@ -1262,6 +1263,7 @@ public final class SentryManager {
             try { host.putStatus("sentry_stall", ""); } catch (Throwable ignored) {}
         }
         evaluate(false);
+        if (migrateIoPending.compareAndSet(false, true)) ioPost(() -> { migrateIoPending.set(false); try { maybeMigrate(); } catch (Throwable t) { log("내장 영상 옮기기 실패 — " + t); } });   // 센트리가 IDLE(시동 ON·주행 중)이어도 돈다
         if (!settings.enabled && state == State.IDLE && state == publishedState && why.equals(publishedWhy)) return;   // ★꺼짐+IDLE이고 올린 상태가 현재와 같으면 디스크 스캔·업로드·고아 정리 생략(꺼진 차는 매분 저장소를 안 만진다)
         long now = SystemClock.elapsedRealtime();
         if (now - lastOrphanElapsed >= ORPHAN_MS) {
@@ -1291,12 +1293,12 @@ public final class SentryManager {
             eventsCache = index.allOldestFirst().size();
         } catch (Throwable t) { log("용량 집계 실패 — " + t); }
         try { updateSpace(); } catch (Throwable t) { log("저장 공간 점검 실패 — " + t); }
-        try { maybeMigrate(); } catch (Throwable t) { log("내장 영상 옮기기 실패 — " + t); }
     }
 
     // ── 내장에 남은 영상을 외장으로 옮기기(운영자 10-10 "작은 기능") — io 스레드, 한 번에 이벤트 하나, 20초 간격 ──
     static final long MIGRATE_EVERY_MS = 20_000L, MIGRATE_MIN_AGE_MS = 180_000L, MIGRATE_RETRY_MS = 300_000L;
     static final int MIGRATE_MIN_FREE_MB = 300;
+    private final java.util.concurrent.atomic.AtomicBoolean migrateIoPending = new java.util.concurrent.atomic.AtomicBoolean();
     private long lastMigrateElapsed;
     private volatile int leftoverCount;   // 내장 단계에 남아 옮길 차례를 기다리는 이벤트 수(상태 표시용)
 
@@ -1309,34 +1311,38 @@ public final class SentryManager {
         SentrySettings s = settings;
         SentryHost hs = host;
         if (st == null || ix == null || s == null || hs == null) return;
-        if (!st.migrationTargetReady()) { leftoverCount = 0; return; }   // 외장에 쓰고 있지 않으면 옮길 곳이 없다
-        if (state == State.RECORDING || clearing.get() || hs.lowVoltage() || storageYield != null) return;   // 녹화·삭제·저전압·저장소 양보 중엔 건드리지 않는다
-        if (st.leftoverRoots().isEmpty()) { leftoverCount = 0; return; }
+        if ("internal".equals(s.storage)) { leftoverCount = 0; return; }   // 내장을 골랐으면 옮길 곳이 없다
+        boolean staging = SentrySettings.isInternalOnly();   // 씨라7 시험판: 녹화는 늘 내장, 외장(시동 켜면 붙는 USB·SD)으로 옮긴다
+        File destRoot = st.migrationDestRoot();   // 외장이 붙어 있고 쓰기 되면 그 공용 폴더, 아니면 null
+        if (destRoot == null && !staging) { leftoverCount = 0; return; }   // 일반: 외장에 쓰고 있지 않으면 옮길 곳이 없다
+        if (state == State.RECORDING || clearing.get() || hs.lowVoltage() || (!staging && storageYield != null)) {   // 녹화·삭제·저전압·저장소 양보 중엔 건드리지 않는다
+            return;
+        }
+        if (st.leftoverRoots(destRoot).isEmpty()) { leftoverCount = 0; return; }
         String rec = recordingEventId();
         long cutoff = System.currentTimeMillis() - MIGRATE_MIN_AGE_MS;
         String candId = null;
         File candDir = null;
         int n = 0;
         for (SentryIndex.EventMeta m : ix.allOldestFirst()) {
-            File d = st.leftoverDir(m.id);
+            File d = st.leftoverDir(m.id, destRoot);
             if (d == null) continue;
             n++;
             if (candId == null && !m.id.equals(rec) && SentryStorage.lastModifiedTree(d) < cutoff) { candId = m.id; candDir = d; }
         }
         leftoverCount = n;
-        if (candId == null) return;
+        if (destRoot == null || candId == null) return;   // 씨라7: 외장이 아직 안 붙었으면 센 개수만 알리고 기다린다
         long sizeMb = Math.max(1L, dirBytes(candDir) / (1024L * 1024L));
-        File destRoot = st.root();
         if (st.freeMb(destRoot) < sizeMb + MIGRATE_MIN_FREE_MB) { lastMigrateElapsed = now + MIGRATE_RETRY_MS - MIGRATE_EVERY_MS; log("내장 영상 옮기기 미룸 — 외장 여유 부족"); return; }
-        long limit = st.limitMb();
-        if (limit > 0 && st.usedMb() + sizeMb > limit) return;   // 한도를 넘기게 될 영상은 옮기지 않는다(자동 삭제 모드면 오래된 것부터 정리됨)
-        if (s.whenFullStop() && spaceLevelCache >= 3) return;
+        long limit = st.limitMbOf(destRoot);
+        if (limit > 0 && st.usedMbOf(destRoot) + sizeMb > limit) return;   // 한도를 넘기게 될 영상은 옮기지 않는다(자동 삭제 모드면 오래된 것부터 정리됨)
+        if (!staging && s.whenFullStop() && spaceLevelCache >= 3) return;
         try {
             long t0 = SystemClock.elapsedRealtime();
             long b = SentryStorage.moveEventDir(candDir, destRoot, SentryStorage.eventRel(candId));
             SentryIndex.bumpRev();
             leftoverCount = Math.max(0, n - 1);
-            log("내장에 남은 영상을 외장으로 옮김 " + candId + " " + (b / (1024L * 1024L)) + "MB, " + (SystemClock.elapsedRealtime() - t0) + "ms (남은 " + leftoverCount + "개)");
+            log((staging ? "내장 임시 영상을 외장으로 옮김 " : "내장에 남은 영상을 외장으로 옮김 ") + candId + " " + (b / (1024L * 1024L)) + "MB, " + (SystemClock.elapsedRealtime() - t0) + "ms (남은 " + leftoverCount + "개)");
         } catch (IOException e) {
             lastMigrateElapsed = now + MIGRATE_RETRY_MS - MIGRATE_EVERY_MS;   // 실패하면 5분 뒤에 다시(원본은 그대로)
             log("내장 영상 옮기기 실패 " + candId + " — " + e.getMessage());
@@ -1375,7 +1381,7 @@ public final class SentryManager {
         SentryStorage st = storage;
         if (s == null || st == null) return;
         long limit = st.limitMb();
-        long used = usedMbCache;
+        long used = SentrySettings.isInternalOnly() ? st.usedMb() : usedMbCache;   // 씨라7 시험판: 가득 판단은 내장 임시 저장 기준(외장으로 옮긴 영상은 세지 않음)
         int pct = spacePct(used, limit);
         spacePctCache = pct;
         if (!s.whenFullStop()) { spaceLevelCache = 0; return; }
@@ -1516,7 +1522,7 @@ public final class SentryManager {
                 failSession("인코더 시작 실패 " + w + "x" + fh);
                 return;
             }
-            SentryMotion mo = s.motionOnly ? new SentryMotion(w, fh, s) : null;
+            SentryMotion mo = s.needsMotionDetector() ? new SentryMotion(w, fh, s) : null;   // 연속 녹화는 continuous_detect를 켠 때만(표시용)
             if (mo != null) mo.setLogger(this::log);
             synchronized (lock) {
                 encoder = e; motion = mo;
@@ -1542,10 +1548,57 @@ public final class SentryManager {
     // 이벤트 알림을 보낸다(이미 보냈으면 무시). 조명 의심으로 막았다가 나중에 사람·차량이 판정되면 그때 보낸다
     private void notifyNow(String id) {
         synchronized (notifyLock) {
-            if (id == null || !id.equals(notifyId) || notifyState == 1) return;
+            if (id == null || !id.equals(notifyId) || notifyState == 1 || notifyState == 3) return;   // 1=이미 보냄, 3=연속 녹화 표시용 감지에서 바로 앞 알림과 가까워 이번 움직임은 알리지 않음
             notifyState = 1;
         }
+        if (!pipeMotionOnly) lastContAlertElapsed = SystemClock.elapsedRealtime();
         if (settings.notify) host.postCarEvent("sentry:" + id);
+    }
+
+    // ── 연속 녹화 중 표시용 감지(운영자 10-10 "연속 녹화 중에도 사람·차량 표시", 설정 continuous_detect) ──
+    // 녹화를 시작·끊는 데는 쓰지 않는다. 움직임 시간축 표시(marks)는 위 onFrame이 이미 모으고, 여기서는 움직임이 시작될 때마다(15초 넘게 잠잠했다 다시 움직이면 새로 시작)
+    // 그 순간의 프레임으로 사람·차량을 판정해 지금 녹화 중인 이벤트의 objects·알림 사진·조명 의심으로 남기고, 알림은 움직임 녹화와 같은 규칙(판정 뒤 sentry:/sobj:)으로 보낸다.
+    // 붐비는 곳에서 푸시가 쏟아지지 않게 알림은 바로 앞 알림에서 60초 안이면 건너뛴다(표시는 그대로 남김). 이벤트가 바뀌었는데 움직임이 계속되면 새 이벤트에도 표시를 남기되 알림은 안 보낸다.
+    static final long CONT_EPISODE_QUIET_MS = 15_000L, CONT_ALERT_COOLDOWN_MS = 60_000L;
+    private volatile long contLastTrigElapsed;
+    private volatile long lastContAlertElapsed;
+    private volatile String contEpisodeEventId;
+    private volatile boolean episodeFirst;   // 이번 움직임에서 아직 사람·차량 짝 이벤트(sobj)를 안 보냄
+
+    // 이번 움직임을 새 에피소드로 볼지, 알림을 낼지 — 순수 판정이라 JVM에서 시험한다. 반환: 0=이어지는 움직임(새로 시작 안 함) 1=새 에피소드·알림 가능 2=새 에피소드·알림 안 함
+    static int contEpisodeDecision(long nowE, long lastTrigE, long lastAlertE, boolean eventChanged, long quietMs, long cooldownMs) {
+        boolean gap = lastTrigE == 0L || nowE - lastTrigE >= quietMs;
+        if (!gap && !eventChanged) return 0;
+        if (!gap) return 2;   // 같은 움직임이 새 이벤트로 넘어옴 — 표시만 남기고 알림은 안 보낸다
+        boolean cool = lastAlertE != 0L && nowE - lastAlertE < cooldownMs;
+        return cool ? 2 : 1;
+    }
+
+    private void onContinuousMotion(byte[] nv21, int w, int fh, long nowE) {
+        String idNow;
+        synchronized (lock) { idNow = eventId; }
+        if (idNow == null) return;
+        long prev = contLastTrigElapsed;
+        contLastTrigElapsed = nowE;
+        int d = contEpisodeDecision(nowE, prev, lastContAlertElapsed, !idNow.equals(contEpisodeEventId), CONT_EPISODE_QUIET_MS, CONT_ALERT_COOLDOWN_MS);
+        if (d == 0) return;
+        contEpisodeEventId = idNow;
+        final boolean mute = d == 2;
+        final String id = idNow;
+        final byte[] copy = nv21.clone();
+        post(() -> startContinuousEpisode(id, copy, w, fh, mute));
+    }
+
+    private void startContinuousEpisode(String id, byte[] frame, int w, int fh, boolean mute) {
+        synchronized (lock) {
+            if (!id.equals(eventId) || !recording) return;
+            episodeFirst = true;
+            classifyDue = 0;
+        }
+        synchronized (notifyLock) { notifyId = id; notifyState = mute ? 3 : 0; }
+        if (!settings.objectsOn()) { notifyNow(id); return; }   // 객체 인식을 껐으면 움직임만으로 바로 알림(음소거 구간이면 안 보냄)
+        if (!mute) handler.postDelayed(() -> notifyNow(id), NOTIFY_MAX_DELAY_MS);   // 판정이 안 와도 이 시간엔 보낸다
+        classifyExec.execute(() -> classifyEvent(id, frame, w, fh, 0));
     }
 
     // 조명 의심 — 알림을 보내지 않는다(보류 중일 때만)
@@ -1662,10 +1715,12 @@ public final class SentryManager {
                 }
                 return;
             }
-            boolean first;
+            boolean first, epFirst;
             synchronized (lock) {
                 if (!id.equals(eventId)) return;
                 first = eventObjects.isEmpty();
+                epFirst = episodeFirst;
+                episodeFirst = false;
                 eventLight = false;   // 사람·차량이 판정됐으면 조명 의심 아님
                 eventObjects.add(new float[]{f.kind, f.pct(), f.cell, f.x0, f.y0, f.x1, f.y1});
                 marks.setCellKind(f.cell, f.kind);
@@ -1679,7 +1734,9 @@ public final class SentryManager {
                     try (FileOutputStream fo = new FileOutputStream(af)) { fo.write(jpg); }
                 } catch (Throwable t) { log("알림 사진 저장 실패 " + id + " — " + t); }
             }
-            if (first && settings.notify) {   // 새 앱이 알림 문구를 "사람 감지 — 좌측"으로 바꾸는 짝 이벤트. 옛 앱은 모르는 이벤트라 무시하고 아래 기존 알림만 보인다
+            boolean muted;
+            synchronized (notifyLock) { muted = notifyState == 3; }
+            if (epFirst && settings.notify && !muted) {   // 새 앱이 알림 문구를 "사람 감지 — 좌측"으로 바꾸는 짝 이벤트. 옛 앱은 모르는 이벤트라 무시하고 아래 기존 알림만 보인다
                 String oe = SentryObjects.objectEvent(id, f.kind, settings.layoutMap, f.cell);
                 host.postCarEvent(oe);
                 log("알림 문구 이벤트 " + oe);
@@ -1738,6 +1795,7 @@ public final class SentryManager {
             setState(State.RECORDING, "움직임 감지");
             saveThumb(id, frame, w, fh);
             synchronized (notifyLock) { notifyId = id; notifyState = 0; }
+            episodeFirst = true;
             if (!settings.objectsOn()) {
                 notifyNow(id);   // 객체 인식을 껐으면 예전처럼 움직임만으로 바로 알림(판정을 기다리지 않음)
             } else {
@@ -1829,7 +1887,7 @@ public final class SentryManager {
                 if (writer == null && !openWriterLocked()) return;
                 if (s.keyFrame) {
                     long now = SystemClock.elapsedRealtime();
-                    if (!pipeMotionOnly && now - eventStartElapsed >= EVENT_MS) {
+                    if (!pipeMotionOnly && now - eventStartElapsed >= settings.continuousEventMs()) {   // 설정 continuous_event_s(기본 600초) — 이벤트 길이가 조각(1분)보다 짧으면 마감 때 조각도 함께 닫힌다
                         finishEventLocked();
                         String prev = storage.repinIfFallback();   // 옛 이벤트 마감 뒤·새 이벤트 전 — 폴백 중이면 외장 복귀
                         if (prev != null) log("저장소 복귀 " + prev + " → " + storage.tier() + " " + storage.root().getAbsolutePath());

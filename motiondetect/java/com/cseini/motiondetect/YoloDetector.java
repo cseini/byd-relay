@@ -19,6 +19,7 @@ import java.nio.channels.FileChannel;
 public final class YoloDetector {
     private static final String TAG = "YoloDetector";
     public static final String MODEL = "models/yolo11n_416.tflite";
+    public static final String MODEL_320_INT8 = "models/yolo11n_320_int8.tflite";   // ★868 BSD 후측방용 — 입력 320, 정수 압축(입출력은 실수 그대로, 센트리 세션 71d22433)
     private static final int[] VEHICLE = {1, 2, 3, 5, 7};
 
     private Interpreter itp;
@@ -30,12 +31,15 @@ public final class YoloDetector {
     private float[][] out;   // [84][N]
     private volatile long lastMs;
 
-    public YoloDetector(Context ctx) {
+    public YoloDetector(Context ctx) { this(ctx, MODEL); }
+
+    // 입력 크기는 모델에서 읽는다(416·320 모두 같은 디코드)
+    public YoloDetector(Context ctx, String model) {
         byte[] rgbTmp;
         try {
             Interpreter.Options o = new Interpreter.Options();
             o.setNumThreads(4);
-            itp = new Interpreter(loadModel(ctx, MODEL), o);
+            itp = new Interpreter(loadModel(ctx, model), o);
             int[] in = itp.getInputTensor(0).shape();       // [1,3,S,S]
             size = in[2];
             int[] os = itp.getOutputTensor(0).shape();       // [1,84,N]
