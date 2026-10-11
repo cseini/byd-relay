@@ -7731,7 +7731,9 @@ public class SnifferService extends Service {
                         //   번갈아 0↔실값 플랩(09-27 씨라7 테스트2 "turn 항상 0"·BSD turnOnly 알림 死의 원인). D5 turnflash는 startD5Poller 전담.
                         if (ldev != null && relay != null && !DiLink5Support.isDiLink5()) {
                             int tf = callGetInt0(ldev, "getTurnLightFlashState");
-                            if (tf >= 0 && !(tf != turnEvtVal && System.currentTimeMillis() - turnEvtAt < 600))   // ★739 이벤트 직후 getter가 아직 옛값이면 덮지 않음
+                            if (tf >= 0 && tf <= 1) turnReleasedSide = 0;
+                            boolean releasedTail = turnReleasedSide != 0 && tf == turnReleasedSide && System.currentTimeMillis() - turnReleasedAt < 3000;   // ★873
+                            if (tf >= 0 && !releasedTail && !(tf != turnEvtVal && System.currentTimeMillis() - turnEvtAt < 600))   // ★739 이벤트 직후 getter가 아직 옛값이면 덮지 않음
                                 applyTurnFlash(tf, "poll", System.currentTimeMillis());   // ★2026-09-17 이벤트 경로와 같은 적용 함수(turnflash/hazard + 클러스터 측면 카메라 판단). 폴은 백스톱
                         }
                     } catch (Throwable ignored) {
@@ -9281,13 +9283,22 @@ public class SnifferService extends Service {
     // ★739 이벤트값 1·2·4는 getter가 따라잡은 최종값과 늘 같았다(10-04 실측 7일 90/90: evt 4→4·evt 2→2·evt 1→1) — getter 확인(평균 0.18초, 불일치면 +150ms)
     //   없이 바로 적용해 카메라 창이 그만큼 빨리 뜬다. 그 밖의 값(5·6 등)만 getter로 확정. 폴(백스톱)은 이벤트 직후 0.6초 동안 다른 값이면 무시(getter가 아직 옛값).
     private volatile long turnEvtAt; private volatile int turnEvtVal = -1;
+    private volatile int turnReleasedSide; private volatile long turnReleasedAt;   // ★873 잡았다 놓은 쪽 — 등이 꺼질 때까지(최대 3초) 폴이 이 값을 다시 켜지 않게
     // ★816 꺼짐(1)은 바로 적용하지 않는다 — 이 이벤트는 레버 위치라, 한 번 딸깍(3번 깜빡임)이면 레버는 0.3초 만에 돌아와도 등은 계속 깜빡인다.
     //   바로 끄면 창이 닫혔다가 폴이 '아직 깜빡임'을 읽어 다시 떴다(운영자 10-06 "우리 영상도 깜빡 난리나", 19:43:05 꺼짐 0.3초→0.55초 쉼→2.3초 다시 뜸).
     private void onTurnSignalEvent(final int intVal) {
         final long ts = System.currentTimeMillis();
         if (intVal == 2 || intVal == 4) {
-            turnEvtAt = ts; turnEvtVal = intVal;
+            turnEvtAt = ts; turnEvtVal = intVal; turnReleasedSide = 0;
             new Thread(() -> applyTurnFlash(intVal, "evt " + intVal, ts), "turn-evt").start();
+            return;
+        }
+        // ★873 레버를 0.6초 넘게 잡고 있다 놓았으면 한 번 딸깍(편의 3번 깜빡임)이 아니다 — 등이 마저 꺼질 때까지(0.6~2초, 10-11 실측 닫힘 0.86~2.3초) 기다리지 않고
+        //   바로 끈다(운영자 10-11 "꺼지는 속도가 0.3초 셋팅인데 너무 오래 걸리네"). 폴이 아직 깜빡이는 같은 쪽 값을 읽어 창을 다시 띄우지 않게 등이 꺼질 때까지 그 값만 무시.
+        if (intVal == 1 && (turnEvtVal == 2 || turnEvtVal == 4) && ts - turnEvtAt >= 600) {
+            final int side = turnEvtVal; final long held = ts - turnEvtAt;
+            turnReleasedSide = side; turnReleasedAt = ts; turnEvtAt = ts; turnEvtVal = 1;
+            new Thread(() -> { postToD1("HUASSIST", "깜빡이 레버 " + held + "ms 잡았다 놓음 — 바로 끔"); applyTurnFlash(1, "evt 1 레버 놓음", ts); }, "turn-evt").start();
             return;
         }
         new Thread(() -> {
