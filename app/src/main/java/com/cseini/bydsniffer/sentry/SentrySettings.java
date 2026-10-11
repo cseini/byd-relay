@@ -26,7 +26,7 @@ public final class SentrySettings {
             "time_limit_enabled", "time_mode", "time_from", "time_to",
             "safe_location_enabled", "hazard_on_motion", "screen_message",
             "sensitivity", "min_detect_s", "roi_enabled", "rois", "layout_map", "layout_flip",
-            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "when_full", "summary_announce", "continuous_event_s", "continuous_detect", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
+            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "when_full", "internal_limit_mb", "migrate_to_external", "summary_announce", "continuous_event_s", "continuous_detect", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
 
     private static final String[] STORAGES = {"internal", "sd", "usb"};
     private static final String[] RESOLUTIONS = {"hd", "fhd", "original"};
@@ -59,6 +59,8 @@ public final class SentrySettings {
     public final int continuousEventS;    // 연속 녹화(motion_only=false) 때 이벤트(녹화 파일) 하나의 길이(초) — 30~600, 30초 단위, 기본 600(운영자 10-10, 최대 10분). 움직임 녹화에는 영향 없음
     public final boolean continuousDetect; // 연속 녹화(motion_only=false) 중에도 움직임 감지·물체 판정을 표시용으로 돌림(기본 꺼짐 — CPU·발열) — 운영자 10-10. 녹화를 시작·끊는 데는 쓰지 않는다
     public final boolean summaryAnnounce; // 시동을 켤 때 릴레이 앱(헤드유닛)이 센트리 가동 요약을 음성 읽기+화면 문구로 안내(기본 켜짐) — 운영자 10-10 "음성 설정은 폰 앱 센트리 설정에, 기본 켜짐"
+    public final int internalLimitMb;     // 씨라7 내장 임시 저장 상한 선택(0=기본 3GB, 그 외 1000~) — 운영자 10-11. limit_mb(외장 한도)와 별개라 이미 외장 한도를 정해 둔 사람의 내장 상한이 갑자기 늘지 않는다
+    public final boolean migrateToExternal;   // 내장 임시 영상을 USB·SD로 옮기기(기본 켬). 끄면 영상은 내장에 남는다
     public final String whenFull;         // 저장 공간이 가득 차면: overwrite(가장 오래된 것부터 자동 삭제, 기본) | stop(지우지 않고 녹화 중지 + 가득 차 가면 알림) — 운영자 10-10
     public final boolean objectDetect;    // 객체 인식(YOLO) 사용 — 끄면 YOLO를 아예 안 돌리고 예전처럼 움직임만으로 이벤트·알림(운영자 10-10, 앱 센트리 설정에서 사용자가 고름)
     public final boolean detectPerson;    // 판정 결과에서 사람을 남김
@@ -104,6 +106,9 @@ public final class SentrySettings {
         cellViews = internalOnly ? new JSONObject() : normalizeCellViews(o.opt("cell_views"));   // 씨라7 시험판: 어안 보정표는 돌핀 렌즈 기준이라 쓰지 않는다
         filterPerson = bool(o, "filter_person", false);
         filterVehicle = bool(o, "filter_vehicle", false);
+        int ilim = num(o, "internal_limit_mb", 0, 0, Integer.MAX_VALUE);
+        internalLimitMb = (ilim > 0 && ilim < 1000) ? 1000 : ilim;
+        migrateToExternal = bool(o, "migrate_to_external", true);
         whenFull = pick(o, "when_full", "overwrite", WHEN_FULL);
         summaryAnnounce = bool(o, "summary_announce", true);
         continuousEventS = roundTo30(num(o, "continuous_event_s", 600, 30, 600));
@@ -208,6 +213,8 @@ public final class SentrySettings {
             o.put("filter_person", filterPerson);
             o.put("filter_vehicle", filterVehicle);
             o.put("when_full", whenFull);
+            o.put("internal_limit_mb", internalLimitMb);
+            o.put("migrate_to_external", migrateToExternal);
             o.put("summary_announce", summaryAnnounce);
             o.put("continuous_event_s", continuousEventS);
             o.put("continuous_detect", continuousDetect);
@@ -355,6 +362,31 @@ public final class SentrySettings {
 
     // 0이면 free의 50%(최소 1000), 그 외 1000~free 클램프. 결과는 늘 1000 이상
     public static final int INTERNAL_DEFAULT_LIMIT_MB = 3072;   // 한도를 정하지 않은 내장 저장소 기본 상한 — 내장이 꽉 차면 차량 시스템에 부담(공개 전 보강, 10-06 운영자 승인)
+
+    // ★내장 하한(운영자 10-11, 차량 시스템 보호) — 내장 저장소는 전체의 5%(최소 4GB)를 센트리가 건드리지 못하게 비워 둔다
+    public static final long INTERNAL_FLOOR_MIN_MB = 4096L;
+    public static long internalFloorMb(long totalMb) { return Math.max(INTERNAL_FLOOR_MIN_MB, Math.max(0L, totalMb) * 5L / 100L); }
+
+    // 루트 종류별 최종 한도(MB). freeUsedMb=센트리가 쓸 수 있는 총량(남은 공간+이미 쓴 양), totalMb=그 저장소 전체 크기.
+    //   외장: 예전 그대로. 내장: 씨라7 임시 저장은 internal_limit_mb(0이면 3GB), 그 밖의 내장은 limit_mb를 쓰고(0이면 남은 공간의 절반, 3GB 이내), 둘 다 하한을 지킨 뒤의 총량(freeUsed-하한)을 넘지 못한다.
+    public static int limitMbFor(int limitMb, int internalLimitMb, long freeUsedMb, boolean internalRoot, long totalMb) {
+        if (!internalRoot) return clampLimitMb(limitMb, freeUsedMb, false);
+        int wanted = internalOnly ? internalLimitMb : limitMb;
+        long v;
+        if (wanted <= 0) v = Math.max(1000L, Math.min(freeUsedMb / 2, INTERNAL_DEFAULT_LIMIT_MB));
+        else v = Math.max(1000L, Math.min((long) wanted, freeUsedMb));
+        v = Math.min(v, Math.max(freeUsedMb - internalFloorMb(totalMb), 1L));   // 하한을 못 지키는 처지여도 한도는 1MB 이상(0은 "한도 없음"으로 읽히는 곳이 있다) — 녹화 중지는 SentryManager가 floorExhausted로 막는다
+        return (int) Math.min(v, Integer.MAX_VALUE);
+    }
+
+    // 하한 때문에 한도가 줄었는가(상태 표시용) — 하한이 없었다면 잡혔을 한도보다 실제 한도가 작으면 true
+    public static boolean floorHit(int limitMb, int internalLimitMb, long freeUsedMb, long totalMb) {
+        int wanted = internalOnly ? internalLimitMb : limitMb;
+        long v;
+        if (wanted <= 0) v = Math.max(1000L, Math.min(freeUsedMb / 2, INTERNAL_DEFAULT_LIMIT_MB));
+        else v = Math.max(1000L, Math.min((long) wanted, freeUsedMb));
+        return Math.max(freeUsedMb - internalFloorMb(totalMb), 0L) < v;
+    }
 
     public static int clampLimitMb(int wanted, long freeMb) {
         return clampLimitMb(wanted, freeMb, false);

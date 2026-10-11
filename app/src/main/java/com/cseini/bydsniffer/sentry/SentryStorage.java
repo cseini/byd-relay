@@ -157,16 +157,35 @@ public final class SentryStorage {
             vols.put(removableJson("usb", rem.size() > 1 ? rem.get(1) : null, "usb".equals(settings.storage)));
             o.put("volumes", vols);
             o.put("estimateHours", estimateJson(limit, settings));
+            File idir = internalDir();   // 내장 임시 저장 상한·하한(운영자 10-11) — 앱이 슬라이더 옆에 보여 주고, 하한에 걸리면 알린다
+            long iUsed = dirSize(idir) / MB;
+            long iFreeUsed = freeMb(idir) + iUsed, iTotal = totalMb(idir);
+            o.put("internalLimitMb", SentrySettings.limitMbFor(settings.limitMb, settings.internalLimitMb, iFreeUsed, true, iTotal));
+            o.put("internalFloorMb", SentrySettings.internalFloorMb(iTotal));
+            o.put("internalFloorHit", SentrySettings.floorHit(settings.limitMb, settings.internalLimitMb, iFreeUsed, iTotal));
+            o.put("internalFloorBlocked", iFreeUsed - SentrySettings.internalFloorMb(iTotal) <= 0);   // true면 하한 때문에 새 녹화를 쉬는 중(영상은 지우지 않음)
             return o;
         } catch (JSONException e) {
             throw new IllegalStateException("저장소 JSON 변환 실패: " + e.getMessage(), e);
         }
     }
 
+    // 내장 루트에 쓰는 중이고 하한을 지킨 뒤 센트리가 쓸 공간이 없다(남은 공간+센트리가 쓴 양 ≤ 하한) — 새 녹화를 막고 자동 삭제도 하지 않는다(센트리 영상을 다 지워도 여유는 안 돌아온다)
+    public boolean floorExhausted() {
+        File r = root();
+        if (!isInternalRoot(r)) return false;
+        return freeMb(r) + usedMb() - SentrySettings.internalFloorMb(totalMb(r)) <= 0;
+    }
+
+    // 한 루트의 한도(MB) — 내장이면 내장 상한 설정과 하한(전체의 5%, 최소 4GB)을 적용한다
+    private long limitFor(File r, long usedMb) {
+        return SentrySettings.limitMbFor(settings.limitMb, settings.internalLimitMb, freeMb(r) + usedMb, isInternalRoot(r), totalMb(r));
+    }
+
     // 센트리가 쓸 수 있는 총량(남은 공간 + 이미 센트리가 쓴 양)을 기준으로 한도를 잡는다 — 녹화가 늘수록 한도가 줄어드는 것 방지
     public long limitMb() {
         File r0 = root();
-        return SentrySettings.clampLimitMb(settings.limitMb, freeMb(r0) + usedMb(), isInternalRoot(r0));
+        return limitFor(r0, usedMb());
     }
 
     // 내장 저장소 안의 루트인가(앱 전용 폴더·앱 내부 폴더) — 한도를 안 정했을 때 내장은 3GB로 막는다
@@ -267,7 +286,7 @@ public final class SentryStorage {
     // 외장 한도 계산 — 그 루트의 남은 용량과 이미 쓴 양으로 정한 한도(MB)
     public long limitMbOf(File root) {
         long used = dirSize(root) / MB;
-        return SentrySettings.clampLimitMb(settings.limitMb, freeMb(root) + used, isInternalRoot(root));
+        return limitFor(root, used);
     }
 
     public long usedMbOf(File root) { return dirSize(root) / MB; }
@@ -394,7 +413,8 @@ public final class SentryStorage {
         List<SentryIndex.EventMeta> all = idx.allOldestFirst();
         for (final File r : allRoots()) {
             long usedBytes = dirSize(r);
-            long limitBytes = SentrySettings.clampLimitMb(settings.limitMb, freeMb(r) + usedBytes / MB, isInternalRoot(r)) * MB;
+            if (isInternalRoot(r) && freeMb(r) + usedBytes / MB - SentrySettings.internalFloorMb(totalMb(r)) <= 0) continue;   // 하한 아래면 지워도 여유가 안 돌아오니 지우지 않는다
+            long limitBytes = limitFor(r, usedBytes / MB) * MB;
             if (usedBytes <= limitBytes) continue;
             List<SentryIndex.EventMeta> candidates = underRoot(all, r);
             List<String> victims = selectPrune(candidates, new ToLongFunction<SentryIndex.EventMeta>() {

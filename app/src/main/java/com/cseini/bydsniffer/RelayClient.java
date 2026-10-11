@@ -183,9 +183,9 @@ public class RelayClient {
         applyIgnEdge(e, now, "AC이벤트 " + p + "/pwr=" + (pwr == IgnitionTracker.NA ? "NA" : pwr));
     }
     /** getPowerLevel 폴링(D3/D5 공통). screenOn=D5 화면 프록시(D3는 false). */
-    public synchronized void onPowerLevelPoll(int pwrLevel, boolean screenOn) {
+    public synchronized void onPowerLevelPoll(int pwrLevel, boolean screenOn, boolean parked) {
         long now = System.currentTimeMillis();
-        applyIgnEdge(ign().onPowerLevelPoll(pwrLevel, screenOn, now), now, "폴링 pwr=" + (pwrLevel == IgnitionTracker.NA ? "NA" : pwrLevel));
+        applyIgnEdge(ign().onPowerLevelPoll(pwrLevel, screenOn, parked, now), now, "폴링 pwr=" + (pwrLevel == IgnitionTracker.NA ? "NA" : pwrLevel) + (screenOn ? " 화면켜짐" : "") + (parked ? " P정차" : ""));
     }
     /** 부팅 첫 관측 — 영속 상태와 대조해 놓친 엣지/재시작 구분. */
     public synchronized void onPowerLevelBoot(int pwrLevel) {

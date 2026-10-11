@@ -134,7 +134,7 @@ final class SentryUiPage {
                 .append("  $('vols').innerHTML=h;var bs=document.querySelectorAll('.fmt');for(var k=0;k<bs.length;k++)bs[k].onclick=function(){ask(this)};}).catch(function(e){msg('저장소 정보를 못 읽었어요: '+e)})}\n")
                 .append("function ask(a){if(busy)return;var l=a.getAttribute('data-l');\n")
                 .append(" if(!confirm(l+' 의 모든 파일이 지워집니다(센트리 녹화뿐 아니라 음악 등 전부). 되돌릴 수 없어요. 계속할까요?'))return;\n")
-                .append(" if(!confirm('정말 '+l+' 를 포맷할까요? 시동이 꺼진 주차 중에만 됩니다.'))return;\n")
+                .append(" if(!confirm('정말 '+l+' 를 포맷할까요? 주차 중에만 됩니다(씨라7은 P단 정차 중).'))return;\n")
                 .append(" busy=true;msg('포맷 요청 중…');fetch(q('/sentry/format'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:a.getAttribute('data-k'),id:a.getAttribute('data-id'),confirm:'format'})})\n")
                 .append(" .then(function(r){return r.json()}).then(function(j){if(!j.ok){busy=false;msg('포맷 못 함: '+(j.error||'알 수 없음'));load();return;}msg('포맷 중… 카드 크기에 따라 1분 넘게 걸릴 수 있어요');poll(0)}).catch(function(e){busy=false;msg('요청 실패: '+e)})}\n")
                 .append("function poll(n){fetch(q('/sentry/status')).then(function(r){return r.json()}).then(function(s){var f=s.format;if(f&&f.state==='running'&&n<120){setTimeout(function(){poll(n+1)},3000);return;}\n")

@@ -534,6 +534,57 @@ public class SentrySettingsTest {
     }
 
     @Test
+    public void internalFloor_isFivePercentOfTotal_withFourGbMinimum() {
+        assertEquals(4096L, SentrySettings.internalFloorMb(0));
+        assertEquals(4096L, SentrySettings.internalFloorMb(65000));
+        assertEquals(4770L, SentrySettings.internalFloorMb(95400));   // 돌핀 내장 95.4GB의 5%
+        assertEquals(6400L, SentrySettings.internalFloorMb(128000));
+    }
+
+    @Test
+    public void limitMbFor_internal_respectsChosenLimitButNeverEatsTheFloor() {
+        long total = 95400;
+        assertEquals("외장은 예전 그대로", 50000, SentrySettings.limitMbFor(100000, 0, 50000, false, total));
+        assertEquals("일반 내장 기본(0)은 남은 공간 절반·3GB 이내", 3072, SentrySettings.limitMbFor(0, 0, 87000, true, total));
+        assertEquals("일반 내장은 limit_mb를 따른다", 20000, SentrySettings.limitMbFor(20000, 0, 87000, true, total));
+        assertEquals("하한(4770)을 뺀 만큼까지만", 87000 - 4770, SentrySettings.limitMbFor(90000, 0, 87000, true, total));
+        assertEquals("남은 공간이 하한 이하면 1MB(녹화는 SentryManager가 막는다)", 1, SentrySettings.limitMbFor(20000, 0, 4000, true, total));
+        SentrySettings.setInternalOnly(true);
+        try {
+            assertEquals("씨라7 기본은 3GB, 외장 한도(limit_mb)가 커도 그대로", 3072, SentrySettings.limitMbFor(100000, 0, 87000, true, total));
+            assertEquals("씨라7 내장 상한을 고르면 그 값", 12000, SentrySettings.limitMbFor(100000, 12000, 87000, true, total));
+            assertEquals("고른 값이어도 하한을 지킨다", 87000 - 4770, SentrySettings.limitMbFor(0, 200000, 87000, true, total));
+            assertEquals("외장 루트는 영향 없음", 50000, SentrySettings.limitMbFor(100000, 12000, 50000, false, total));
+        } finally {
+            SentrySettings.setInternalOnly(false);
+        }
+    }
+
+    @Test
+    public void floorHit_trueOnlyWhenTheFloorShrankTheLimit() {
+        long total = 95400;
+        assertFalse(SentrySettings.floorHit(20000, 0, 87000, total));
+        assertTrue(SentrySettings.floorHit(90000, 0, 87000, total));
+        assertTrue(SentrySettings.floorHit(20000, 0, 4000, total));
+    }
+
+    @Test
+    public void migrateAndInternalLimit_settingsRoundTrip() throws JSONException {
+        SentrySettings d = SentrySettings.defaults();
+        assertTrue("옮기기 기본 켬", d.migrateToExternal);
+        assertEquals("내장 상한 기본 0(=3GB)", 0, d.internalLimitMb);
+        JSONObject j = new JSONObject();
+        j.put("migrate_to_external", false);
+        j.put("internal_limit_mb", 500);
+        SentrySettings s = SentrySettings.fromJson(j);
+        assertFalse(s.migrateToExternal);
+        assertEquals("1000 미만은 1000으로", 1000, s.internalLimitMb);
+        JSONObject back = s.toJson();
+        assertFalse(back.getBoolean("migrate_to_external"));
+        assertEquals(1000, back.getInt("internal_limit_mb"));
+    }
+
+    @Test
     public void internalOnly_clampsEncoderLoadAndIgnoresDewarpTables() throws JSONException {
         JSONObject heavy = new JSONObject();
         heavy.put("resolution", "original"); heavy.put("fps", "normal"); heavy.put("bitrate_kbps", 8000);

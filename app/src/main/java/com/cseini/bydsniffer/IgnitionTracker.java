@@ -115,10 +115,19 @@ public final class IgnitionTracker {
      * 주기 폴링(P기어 2s / 그외 500ms). screenOn=D5 화면 프록시(D3는 false 넘김).
      */
     public Edge onPowerLevelPoll(int pwrLevel, boolean screenOn, long nowMs) {
+        return onPowerLevelPoll(pwrLevel, screenOn, false, nowMs);
+    }
+
+    /**
+     * parked = 직전에 읽은 기어 P·정차(속도 0·주행 아님). ★10-11 FB2393: 씨라7은 시동을 꺼도 헤드유닛이 다시 부팅되며 화면이 켜져 있어,
+     * 화면 프록시가 꺼진 차를 시동 ON으로 뒤집었다(센트리가 '시동 켜짐'으로 쉼). P·정차면 화면 프록시를 쓰지 않고 실제로 읽은 0을 꺼짐 쪽으로 센다.
+     * 주행 중 재시작(기어 D)은 그대로 화면 프록시로 ON.
+     */
+    public Edge onPowerLevelPoll(int pwrLevel, boolean screenOn, boolean parked, long nowMs) {
         lastSeenTs = nowMs;  // 엣지 유무·NA 무관 — 이 호출 자체가 릴레이 생존 증거
         if (pwrLevel == NA) {
             if (screenOn) darkStreak = 0;
-            if (!sawPwr2 && screenOn) {
+            if (!sawPwr2 && screenOn && !parked) {
                 return applyOn(nowMs);  // SDK 미준비(NA) 구간의 D5 화면 프록시
             }
             return Edge.NONE;  // 유지
@@ -134,11 +143,11 @@ public final class IgnitionTracker {
                 // ★재검증 #3: 화면 프록시로 ON 확정된 뒤 SDK가 끝내 2를 안 주고 0만 주면 OFF를 영영 못 잡던 경로 —
                 //   화면 꺼짐이 연속 DARK_OFF_N회면 OFF(옛 D5 '화면=시동' 동작의 디바운스판). D3(screenOn 항상 false)는
                 //   ign이 -1이라 applyOff가 NONE을 돌려 영향 없음.
-                if (screenOn) {
+                if (screenOn && !parked) {
                     darkStreak = 0;
                     return applyOn(nowMs);
                 }
-                darkStreak++;
+                darkStreak++;   // 화면 꺼짐, 또는 P·정차에서 실제로 읽은 0
                 if (darkStreak >= DARK_OFF_N && ign == 1) { darkStreak = 0; return applyOff(nowMs); }
                 return Edge.NONE;
             }

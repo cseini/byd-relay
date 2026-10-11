@@ -113,6 +113,16 @@ public class SentryManagerTest {
     }
 
     @Test
+    public void formatGateError_dolphinNeedsIgnitionOff_sealion7NeedsParkedStill() {
+        assertNull(SentryManager.formatGateError(false, 0, false));
+        assertEquals("시동을 끄고 주차 중일 때만 포맷할 수 있음", SentryManager.formatGateError(false, 1, true));
+        assertEquals("시동을 끄고 주차 중일 때만 포맷할 수 있음", SentryManager.formatGateError(false, -1, true));
+        assertNull("씨라7은 시동 값과 상관없이 P단 정차면 허용", SentryManager.formatGateError(true, 1, true));
+        assertNull(SentryManager.formatGateError(true, -2147483648, true));
+        assertEquals("P단에서 정차 중일 때만 포맷할 수 있음", SentryManager.formatGateError(true, 0, false));
+    }
+
+    @Test
     public void remoteMonthOk_acceptsOnlyValidYearMonth() {
         assertTrue(SentryManager.remoteMonthOk("2026-10"));
         assertTrue(SentryManager.remoteMonthOk("2026-01"));

@@ -5261,6 +5261,7 @@ public class SnifferService extends Service {
             @Override public boolean lowVoltage() { return lowVoltFlag == 1 && lowSinceMs > 0 && System.currentTimeMillis() - lowSinceMs > lowSustainMs; }
             @Override public int batteryPct() { return lastTripSoc; }
             @Override public String runShell(String cmd) { return AdbAccess.runShell(SnifferService.this, cmd); }
+            @Override public boolean parkedStill() { return lastGearVal == 3 && lastDriving != 1 && !(lastSpeed > 0.5); }   // ★씨라7 외장 포맷 허용 조건 — 기어 P·속도 0·주행 아님
             @Override public float[] objectScores(byte[] nv21, int w, int h) { return sentryObjectScores(nv21, w, h); }
             @Override public float[][] objectDetect(byte[] nv21, int w, int h, int rx, int ry, int rw, int rh, float minScore) { return sentryObjectDetect(nv21, w, h, rx, ry, rw, rh, minScore); }
             @Override public boolean replayAllowed() { return BuildConfig.IS_OPERATOR && lastGearVal == 3 && lastDriving != 1 && !(lastSpeed > 0.5) && !lowVoltage(); }   // 12V가 낮아지면 재생 시험은 중간에도 멈춘다(차 배터리 보호)
@@ -8331,7 +8332,7 @@ public class SnifferService extends Service {
                             relay.putStatus("d5_screen", scr ? 1 : 0);
                         }
                         if (ignBootedFor != relay) { ignBootedFor = relay; relay.onPowerLevelBoot(pwrI); }
-                        else relay.onPowerLevelPoll(pwrI, scr);
+                        else relay.onPowerLevelPoll(pwrI, scr, lastGearVal == GEAR_P && lastDriving != 1 && !(lastSpeed > 0.5));   // ★875 직전 기어 P·정차(FB2393 씨라7 꺼진 차를 화면으로 ON)
                     }
                     Object gb = deviceByName("gearbox");
                     int gear = devInt(gb, "getCurrentGear");

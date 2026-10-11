@@ -339,6 +339,44 @@ public class IgnitionTrackerTest {
         assertEquals(IgnitionTracker.Edge.NONE, t.onPowerLevelPoll(0, false, 11000L));
         assertEquals(1, t.ign());
     }
+    // ★875 FB2393: 씨라7 시동 끈 뒤 헤드유닛이 다시 켜져 화면이 켜져 있어도, P·정차에 실제로 0이면 ON으로 뒤집지 않는다
+    @Test public void poll_d5_bootOff_thenZeroScreenOnParked_staysOff() {
+        IgnitionTracker t = new IgnitionTracker(new IgnitionTracker.Persisted(), 0L);
+        t.onBoot(0, 500L);
+        assertEquals(0, t.ign());
+        for (int i = 0; i < 5; i++) assertEquals(IgnitionTracker.Edge.NONE, t.onPowerLevelPoll(0, true, true, 1000L + 2000L * i));
+        assertEquals(0, t.ign());
+    }
+    // NA(SDK 미준비)라도 P·정차면 화면으로 ON하지 않는다
+    @Test public void poll_d5_NA_screenOnParked_staysOff() {
+        IgnitionTracker t = new IgnitionTracker(new IgnitionTracker.Persisted(), 0L);
+        t.onBoot(0, 500L);
+        assertEquals(IgnitionTracker.Edge.NONE, t.onPowerLevelPoll(IgnitionTracker.NA, true, true, 1000L));
+        assertEquals(0, t.ign());
+    }
+    // 주행 중 재시작(기어 D) — 예전처럼 화면 프록시로 ON
+    @Test public void poll_d5_zeroScreenOnNotParked_isOn() {
+        IgnitionTracker t = new IgnitionTracker(new IgnitionTracker.Persisted(), 0L);
+        t.onBoot(0, 500L);
+        assertEquals(IgnitionTracker.Edge.ON, t.onPowerLevelPoll(0, true, false, 1000L));
+        assertEquals(1, t.ign());
+    }
+    // 화면으로 ON 된 뒤 P·정차에 실제 0이 3번 이어지면(화면이 켜져 있어도) OFF
+    @Test public void poll_d5_proxyOn_thenZeroParked3x_isOff() {
+        IgnitionTracker t = new IgnitionTracker(new IgnitionTracker.Persisted(), 0L);
+        assertEquals(IgnitionTracker.Edge.ON, t.onPowerLevelPoll(0, true, false, 1000L));
+        assertEquals(IgnitionTracker.Edge.NONE, t.onPowerLevelPoll(0, true, true, 3000L));
+        assertEquals(IgnitionTracker.Edge.NONE, t.onPowerLevelPoll(0, true, true, 5000L));
+        assertEquals(IgnitionTracker.Edge.OFF, t.onPowerLevelPoll(0, true, true, 7000L));
+        assertEquals(0, t.ign());
+    }
+    // 시동 레벨 2를 한 번 본 뒤에는 P·정차 여부와 상관없이 예전 규칙(0 두 번이면 OFF, 2면 ON)
+    @Test public void poll_afterSawPwr2_parkedFlagIgnored() {
+        IgnitionTracker t = new IgnitionTracker(new IgnitionTracker.Persisted(), 0L);
+        assertEquals(IgnitionTracker.Edge.ON, t.onPowerLevelPoll(2, true, true, 1000L));
+        assertEquals(IgnitionTracker.Edge.NONE, t.onPowerLevelPoll(0, true, true, 3000L));
+        assertEquals(IgnitionTracker.Edge.OFF, t.onPowerLevelPoll(0, true, true, 5000L));
+    }
     // D3(screenOn 항상 false, ign 미확정)는 이 경로에 영향 없음
     @Test public void poll_d3_zeroScreenOff3x_beforeSawPwr2_staysUnknown() {
         IgnitionTracker t = new IgnitionTracker(new IgnitionTracker.Persisted(), 0L);

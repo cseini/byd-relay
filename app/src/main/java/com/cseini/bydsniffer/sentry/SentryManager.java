@@ -96,6 +96,7 @@ public final class SentryManager {
     private volatile String lastEvent = "";
     private volatile int eventsCache;
     private volatile long usedMbCache;
+    private volatile boolean floorBlockedCache;   // 내장 하한 아래라 새 녹화를 쉰다(씨라7 임시 저장·내장 선택) — updateSpace가 갱신
     private volatile int spaceLevelCache;   // 0 여유 · 1 80%↑ · 2 95%↑ · 3 가득(한도 도달 또는 기기 여유 부족) — "지우지 않고 녹화 중지"(when_full=stop)일 때만 0이 아니다
     private volatile int spacePctCache;
     private int spaceNotified = -1;         // 이미 알린 가장 높은 단계(-1=prefs에서 아직 안 읽음)
@@ -795,6 +796,12 @@ public final class SentryManager {
 
     private static final java.util.regex.Pattern SM_VOLUME_ID = java.util.regex.Pattern.compile("public:\\d+,\\d+");
 
+    // 외장 포맷 허용 조건 — 돌핀 등은 시동 꺼짐(주차), 씨라7(내장 임시 저장)은 USB·SD가 차 전원이 켜져 있을 때만 붙고 시동 판정을 믿기 어려워 기어 P·정차(속도 0)·주행 아님. 허용이면 null, 아니면 거절 문구
+    static String formatGateError(boolean internalOnly, int ignition, boolean parkedStill) {
+        if (internalOnly) return parkedStill ? null : "P단에서 정차 중일 때만 포맷할 수 있음";
+        return ignition == 0 ? null : "시동을 끄고 주차 중일 때만 포맷할 수 있음";
+    }
+
     // `sm list-volumes public` 출력("public:8,97 mounted 95F1-1C00" 줄들)에서 파일시스템 UUID가 같은 볼륨 id. 없거나 id 모양이 이상하면 null
     static String smVolumeId(String list, String uuid) {
         if (list == null || uuid == null || uuid.isEmpty()) return null;
@@ -826,16 +833,16 @@ public final class SentryManager {
         SentryStorage st = storage;
         SentrySettings s = settings;
         if (hs == null || st == null || s == null) return errorJson("센트리 초기화 전");
-        if (SentrySettings.isInternalOnly()) return errorJson("이 기기는 외장 포맷을 지원하지 않음");
         if (!"format".equals(confirm)) return errorJson("confirm");
         if (!"sd".equals(kind) && !"usb".equals(kind)) return errorJson("kind");
-        if (hs.ignitionState() != 0) return errorJson("시동을 끄고 주차 중일 때만 포맷할 수 있음");
+        String gateErr = formatGateError(SentrySettings.isInternalOnly(), hs.ignitionState(), hs.parkedStill());
+        if (gateErr != null) return errorJson(gateErr);
         final String[] vol = st.removableOf(kind);
         if (vol == null) return errorJson("마운트된 " + ("sd".equals(kind) ? "microSD" : "USB") + " 없음");
         if (vol[0].isEmpty()) return errorJson("볼륨 식별 불가");
         if (!vol[0].equalsIgnoreCase(id == null ? "" : id)) return errorJson("볼륨이 바뀜 — 저장소 목록을 새로 고친 뒤 다시");
         if (clearing.get() || migrateIoPending.get()) return errorJson("삭제·이동 중 — 잠시 뒤 다시");
-        final boolean mine = kind.equals(s.storage);
+        final boolean mine = !SentrySettings.isInternalOnly() && kind.equals(s.storage);   // 씨라7은 센트리가 내장에만 녹화하므로 저장소를 양보시킬 일이 없다
         if (mine && state == State.RECORDING) return errorJson("녹화 중 — 끝난 뒤 다시");
         if (!formatBusy.compareAndSet(false, true)) return errorJson("이미 포맷 중");
         formatState = "running"; formatKind = kind; formatWhy = ""; formatAtMs = System.currentTimeMillis();
@@ -1188,6 +1195,7 @@ public final class SentryManager {
         String g = gate(s.enabled, hs.ignitionState(), hs.camOff(), hs.rtcActive(), hs.detectActive(),
                 s.timeAllows(System.currentTimeMillis()), pausedLoc, hs.lowVoltage(),
                 s.pauseWhenPhoneNear, hs.phoneNearFresh(), ("internal".equals(s.storage) || SentrySettings.isInternalOnly()) ? null : storageYield);
+        if (g == null && floorBlockedCache) return "내장 여유 하한 — 녹화 중지";   // 차량 시스템 보호(운영자 10-11) — 하한 아래에서는 어느 저장 정책이든 새 녹화를 하지 않는다
         if (g == null && s.whenFullStop() && spaceLevelCache >= 3) return "저장 공간 가득 — 녹화 중지";   // 지우지 않기를 골랐으니 영상을 지우거나 한도를 늘릴 때까지 쉰다(그때 자동 재개)
         return g;
     }
@@ -1423,7 +1431,7 @@ public final class SentryManager {
             handler.postDelayed(restartTask, RESTART_GAP_MS);
             return;
         }
-        if (!active || old.limitMb != ns.limitMb) {
+        if (!active || old.limitMb != ns.limitMb || old.internalLimitMb != ns.internalLimitMb) {
             SentryStorage prev = storage;
             storage = new SentryStorage(host.context(), ns);
             if (active) storage.pinTo(prev);   // 녹화 중이면 지금 쓰는 루트를 그대로 이어받는다
@@ -1526,6 +1534,7 @@ public final class SentryManager {
             if (candId == null && !m.id.equals(rec) && SentryStorage.lastModifiedTree(d) < cutoff) { candId = m.id; candDir = d; }
         }
         leftoverCount = n;
+        if (!s.migrateToExternal) return;   // 옮기기를 껐으면(운영자 10-11) 센 개수만 알리고 영상은 내장에 둔다
         if (destRoot == null || candId == null) return;   // 씨라7: 외장이 아직 안 붙었으면 센 개수만 알리고 기다린다
         long sizeMb = Math.max(1L, dirBytes(candDir) / (1024L * 1024L));
         if (st.freeMb(destRoot) < sizeMb + MIGRATE_MIN_FREE_MB) { lastMigrateElapsed = now + MIGRATE_RETRY_MS - MIGRATE_EVERY_MS; log("내장 영상 옮기기 미룸 — 외장 여유 부족"); return; }
@@ -1579,6 +1588,8 @@ public final class SentryManager {
         long used = SentrySettings.isInternalOnly() ? st.usedMb() : usedMbCache;   // 씨라7 시험판: 가득 판단은 내장 임시 저장 기준(외장으로 옮긴 영상은 세지 않음)
         int pct = spacePct(used, limit);
         spacePctCache = pct;
+        boolean fb = st.floorExhausted();
+        if (fb != floorBlockedCache) { floorBlockedCache = fb; log(fb ? "내장 여유가 하한 아래 — 새 녹화를 쉽니다(영상은 지우지 않음)" : "내장 여유 하한 회복 — 녹화 재개"); post(this::reevaluate); }
         if (!s.whenFullStop()) { spaceLevelCache = 0; return; }
         int level = spaceLevel(used, limit, st.freeMb(st.root()));
         spaceLevelCache = level;
@@ -1951,7 +1962,7 @@ public final class SentryManager {
         try {
             PreRollEncoder e = encoder;
             if (state != State.ARMED || e == null) return;
-            if (settings.whenFullStop() && spaceLevelCache >= 3) return;   // 가득 찼으면 새 이벤트를 시작하지 않는다(곧 evaluate가 세션을 쉬게 함)
+            if (floorBlockedCache || (settings.whenFullStop() && spaceLevelCache >= 3)) return;   // 가득 찼으면 새 이벤트를 시작하지 않는다(곧 evaluate가 세션을 쉬게 함)
             final boolean fPerson = settings.filterPerson && settings.personOn(), fVehicle = settings.filterVehicle && settings.vehicleOn();   // 끈 종류는 거르기에서도 뺀다
             if (fPerson || fVehicle) {
                 byte[] det = frame;
