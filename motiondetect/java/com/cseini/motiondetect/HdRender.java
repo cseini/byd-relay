@@ -26,6 +26,8 @@ public final class HdRender {
     public int clear(int bufW, int bufH) { return win == 0 ? -1 : YuvNative.winClear(win, bufW, bufH); }
 
     /** ★764 지난 호출 뒤 그린 장들의 구간별 평균(ms) "잠금 a · 지우기 b · 펴기 c · 올리기 d", 그린 장이 없으면 "". */
+    // ★877+ 창 어안 펴기 보조 스레드 수(1~6) — 많을수록 한 장 펴는 시간이 줄고 CPU는 그만큼 동시에 더 쓴다
+    public static void setWarpThreads(int n) { YuvNative.setWarpThreads(n); }
     public static String stats() {
         long[] v = YuvNative.winStats();
         if (v == null || v.length < 5 || v[0] <= 0) return "";

@@ -435,6 +435,11 @@ public class SnifferService extends Service {
             new Thread(() -> { try { Thread.sleep(20000); } catch (InterruptedException ignored) {} postToD1("SPLIT", SplitLauncher.probe(this)); }, "splitprobe").start();
             loadSplitPrefs(); startSplitRatioKeeper();   // ★642 분할 비율 기억·유지   // ★부팅 1회 분할 지원 프로브(씨라이언7 판정용, 읽기 전용)
             HuAssistOverlay.setQuality(prefs.getInt("hu_quality", 1));   // ★865
+            try {   // ★878 헤드유닛 창 어안 펴기 보조 스레드 2→4(운영자 10-11 "어안 펴기에 자원 더") — 실측 펴기 18~27ms·40ms 넘김 10초에 44~62장
+                int wt = prefs.getInt("hu_warp_threads", 4);
+                com.cseini.motiondetect.HdRender.setWarpThreads(wt);
+                postToD1("HUASSIST", "어안 펴기 보조 스레드 " + wt + "개(그리는 스레드 포함 " + (wt + 1) + "덩어리)");
+            } catch (Throwable t) { postToD1("HUASSIST", "어안 펴기 스레드 설정 실패 " + t); }
             if (huOverlay == null) huOverlay = new HuAssistOverlay(this, prefs, clusterCam, m -> postToD1("HUASSIST", m));   // ★728 헤드유닛 카메라 창 ★733 원본 직접 그리기
             if (huOverlay2 == null) huOverlay2 = new HuAssistOverlay(this, prefs, clusterCam, m -> postToD1("HUASSIST", "[오른쪽 창] " + m));   // ★748 후진 D 오른쪽 따로 창
             if (BuildConfig.IS_OPERATOR && !DiLink5Support.isDiLink5()) {   // ★788 씨라7은 헬퍼 관리 끔(오토스타트 해제가 필요 없는 차종)

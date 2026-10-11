@@ -20,7 +20,9 @@ struct BandPool {
     std::condition_variable cv, doneCv;
     std::function<void(int)> job;
     int gen = 0, pending = 0;
-    bool started = false;
+    int workers = 0;                 // 만들어 둔 보조 스레드 수(늘리기만 한다)
+    std::atomic<int> want{2};        // ★877+ 보조 스레드 목표(운영자 10-11 "어안 펴기에 자원 더") — setWarpThreads
+    int bands() { std::lock_guard<std::mutex> lk(mu); return workers + 1; }
     void worker(int t) {
         int seen = 0;
         for (;;) {
@@ -38,8 +40,9 @@ struct BandPool {
         std::lock_guard<std::mutex> one(runMu);
         {
             std::lock_guard<std::mutex> lk(mu);
-            if (!started) { for (int t = 1; t <= 2; ++t) std::thread(&BandPool::worker, this, t).detach(); started = true; }
-            job = f; pending = 2; ++gen;
+            const int w = want.load();
+            while (workers < w) { ++workers; std::thread(&BandPool::worker, this, workers).detach(); }
+            job = f; pending = workers; ++gen;
         }
         cv.notify_all();
         f(0);
@@ -273,8 +276,10 @@ Java_com_cseini_motiondetect_YuvNative_winRender(JNIEnv* env, jclass, jlong win,
                 const uint8_t* src = static_cast<const uint8_t*>(s);
                 uint32_t* bits = static_cast<uint32_t*>(b.bits);
                 const int stride = b.stride;
+                const int nb = gBands.want.load() + 1;   // 이번 장 덩어리 수 = 보조 + 그리는 스레드
                 auto band = [&](int t) {
-                    const int y0 = maxH * t / 3, y1 = maxH * (t + 1) / 3;
+                    if (t >= nb) return;
+                    const int y0 = maxH * t / nb, y1 = maxH * (t + 1) / nb;
                     for (jsize i = 0; i < n; ++i) {
                         const DewarpLut* L = reinterpret_cast<const DewarpLut*>(lh[i]);
                         if (L) renderLutRgbxRows(src, frameW, frameH, m[i * 5], m[i * 5 + 1], L, m[i * 5 + 2], bits, stride, ox + m[i * 5 + 3], oy + m[i * 5 + 4], y0, y1);
@@ -291,6 +296,12 @@ Java_com_cseini_motiondetect_YuvNative_winRender(JNIEnv* env, jclass, jlong win,
     env->ReleaseIntArrayElements(meta, m, JNI_ABORT);
     env->ReleaseLongArrayElements(luts, lh, JNI_ABORT);
     return rc;
+}
+
+// ★877+ 창 그리기 보조 스레드 수(1~6). 다음 장부터 — 스레드는 늘리기만 하고 줄이면 남는 스레드는 일 없이 바로 끝낸다.
+JNIEXPORT void JNICALL
+Java_com_cseini_motiondetect_YuvNative_setWarpThreads(JNIEnv*, jclass, jint n) {
+    gBands.want.store(n < 1 ? 1 : n > 6 ? 6 : n);
 }
 
 // ★764 {장 수, 잠금, 지우기, 펴기, 올리기(마이크로초 합)}을 돌려주고 0으로 되돌린다.

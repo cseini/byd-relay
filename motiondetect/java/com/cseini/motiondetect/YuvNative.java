@@ -34,5 +34,6 @@ final class YuvNative {
     static native void winRelease(long win);
     static native int winRender(long win, byte[] nv21, int frameW, int frameH, long[] luts, int[] meta, int contentW, int contentH, int bufW, int bufH);
     static native int winClear(long win, int bufW, int bufH);
+    static native void setWarpThreads(int n);   // ★877+ 창 어안 펴기 보조 스레드 수(1~6, 기본 2)
     static native long[] winStats();   // ★764 {장 수, 잠금, 지우기, 펴기, 올리기 마이크로초 합} — 읽으면 0으로
 }
