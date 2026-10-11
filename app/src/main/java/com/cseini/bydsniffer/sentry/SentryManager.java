@@ -1432,6 +1432,25 @@ public final class SentryManager {
         evaluate(false);
     }
 
+    // ★호스트가 "프로세스가 통째로 멈췄다 풀렸다"(헤드유닛 절전 뒤 깨어남, 틱 간격이 10초 넘게 벌어짐)를 알릴 때 — 씨라7 밤샘 시험(10-11): 절전 중 카메라 프레임이 죽어 있다가
+    //   깨어난 뒤 프레임 끊김 감시(STALL_MS 120초 + 틱 주기)가 돌 때까지 30~40초를 더 놓쳤다. 프레임이 이미 흐르면 그대로 두고, 5초 넘게 없으면 감시를 기다리지 않고 바로 세션을 새로 시작한다.
+    static final long RESUME_QUIET_MS = 5_000L;
+    public void onHostResumed(long gapMs) {
+        post(() -> {
+            State st = state;
+            if (st != State.ARMED && st != State.RECORDING) return;
+            long quiet = SystemClock.elapsedRealtime() - lastFrameElapsed;
+            if (!resumeRestartNeeded(quiet)) return;
+            err = "프레임 없음 " + (quiet / 1000) + "초";
+            log("헤드유닛 절전에서 깸(멈춤 " + (gapMs / 1000) + "초) — 센트리 " + err + ", 감시를 기다리지 않고 세션 재시작");
+            stopSession(State.PAUSED, "프레임 끊김", true);
+            handler.removeCallbacks(restartTask);
+            handler.postDelayed(restartTask, RESTART_GAP_MS);
+        });
+    }
+
+    static boolean resumeRestartNeeded(long quietMs) { return quietMs > RESUME_QUIET_MS; }
+
     private void tickTask() {
         lastTickRunElapsed = SystemClock.elapsedRealtime();
         if (stallReported) {

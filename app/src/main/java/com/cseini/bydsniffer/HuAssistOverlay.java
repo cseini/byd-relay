@@ -529,13 +529,19 @@ final class HuAssistOverlay {
                 Bitmap dec;
                 try { dec = BitmapFactory.decodeByteArray(f.jpeg, 0, f.jpeg.length, o); } catch (Throwable t) { continue; }
                 if (dec == null) continue;
-                final Bitmap bm = shownSide == 86 ? stackHalves(dec) : dec;   // ★816 세로 배치는 가로 합성(왼쪽|오른쪽)을 위아래로 다시 쌓는다
+                final Bitmap bm = shownSide == 86 ? stackHalves(dec) : shownSide == 82 || shownSide == 84 ? half(dec, shownSide == 84) : dec;   // ★874 따로 창은 자기 반쪽만(씨라7 후진 좌·우)   // ★816 세로 배치는 가로 합성(왼쪽|오른쪽)을 위아래로 다시 쌓는다
                 lastAt = now; stale = false;
                 if (n++ == 0) { final long ms = now - t0; log.d("카메라 창 첫 화면 +" + ms + "ms (" + bm.getWidth() + "x" + bm.getHeight() + ", JPEG)"); }
                 if (gl != null) gl.show(bm);   // ★855 씨라7 GL 화면(어느 스레드에서나 가능)
                 main.post(() -> { if (g == pumpGen && img != null) { if (gl == null) img.setImageBitmap(bm); hint.setVisibility(View.GONE); } });
             }
         }, "hu-assist-pump").start();
+    }
+
+    // ★874 폰 후진 합성(왼쪽|오른쪽, 칸 사이 6)에서 한쪽 칸만
+    private static Bitmap half(Bitmap b, boolean right) {
+        final int sep = 6, hw = ((b.getWidth() - sep) / 2) & ~1;
+        return Bitmap.createBitmap(b, right ? hw + sep : 0, 0, hw, b.getHeight());
     }
 
     // 폰 후진 합성(ClusterCam.revWarps: 칸 너비 ((W-6)/2)&~1, 칸 사이 6) 왼쪽 칸을 위, 오른쪽 칸을 아래로.

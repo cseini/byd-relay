@@ -141,6 +141,57 @@ public final class DiLink5Support {
         return null;
     }
 
+    // ★10-11 씨라7 센트리 밤샘 시험 — BYDAutoSpecialDevice가 계속 안 잡힌 이유 둘: (a) deviceFromSystemApp은 DexClassLoader 부모가 앱 로더라 부모 우선으로 펌웨어/주입분의 `Stub!`이
+    //   먼저 잡히고, (b) 올바른 이름(android.hardware.bydauto.special…)이 아닌 둘째 후보 이름으로만 불려 lastSysReport가 그 실패로 덮였다.
+    //   여기서는 SDK 클래스(android.hardware.bydauto.*·IBYDAuto*)만 컨테이너 APK의 것을 먼저 쓰는 로더로, APK를 하나씩 시도하고 결과를 한 줄(isoReport)로 남긴다.
+    private static final class SdkFirstLoader extends dalvik.system.DexClassLoader {
+        SdkFirstLoader(String dexPath, String optDir, String libPath, ClassLoader parent) { super(dexPath, optDir, libPath, parent); }
+        @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            if (name.startsWith("android.hardware.bydauto.") || name.startsWith("android.hardware.IBYDAuto")) {
+                synchronized (this) {
+                    Class<?> c = findLoadedClass(name);
+                    if (c == null) {
+                        try { c = findClass(name); } catch (ClassNotFoundException ignored) { }
+                    }
+                    if (c != null) {
+                        if (resolve) resolveClass(c);
+                        return c;
+                    }
+                }
+            }
+            return super.loadClass(name, resolve);
+        }
+    }
+    public static volatile String isoReport = "";
+    private static final java.util.Map<String, ClassLoader> isoLoaders = new java.util.HashMap<>();
+    public static synchronized Object deviceIsolated(Context ctx, String className, Context deviceCtx) {
+        StringBuilder log = new StringBuilder();
+        java.util.List<String> pkgs = new ArrayList<>(java.util.Arrays.asList(SDK_PACKAGES));
+        pkgs.add(OEM_PKG);
+        for (String pkg : pkgs) {
+            try {
+                ClassLoader cl = isoLoaders.get(pkg);
+                if (cl == null) {
+                    ApplicationInfo ai = ctx.getPackageManager().getApplicationInfo(pkg, 0);
+                    StringBuilder sb = new StringBuilder(ai.sourceDir);
+                    if (ai.splitSourceDirs != null) for (String sp : ai.splitSourceDirs) sb.append(java.io.File.pathSeparator).append(sp);
+                    cl = new SdkFirstLoader(sb.toString(), ctx.getCodeCacheDir().getAbsolutePath(), ai.nativeLibraryDir, ctx.getClassLoader());
+                    isoLoaders.put(pkg, cl);
+                }
+                Class<?> cls = cl.loadClass(className);
+                Object dev = cls.getMethod("getInstance", Context.class).invoke(null, deviceCtx);
+                log.append(pkg.substring(pkg.lastIndexOf('.') + 1)).append(dev == null ? "=null " : "=OK ");
+                if (dev != null) { isoReport = className.substring(className.lastIndexOf('.') + 1) + " ← " + pkg + " (" + log.toString().trim() + ")"; return dev; }
+            } catch (Throwable t) {
+                Throwable c = (t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+                String cm = c.getMessage(); if (cm != null && cm.length() > 40) cm = cm.substring(0, 40);
+                log.append(pkg.substring(pkg.lastIndexOf('.') + 1)).append("=").append(c.getClass().getSimpleName()).append(cm != null ? "(" + cm + ")" : "").append(" ");
+            }
+        }
+        isoReport = className.substring(className.lastIndexOf('.') + 1) + " 컨테이너별 시도 실패: " + log.toString().trim();
+        return null;
+    }
+
     // ★677 진단 — 씨라7 전부에서 BYDAutoSpecialDevice를 못 잡음(D5 sentry wake 미동작, 10-01). 어느 시스템 앱 APK에 어떤 이름의 클래스가 있는지 한 줄로.
     //   (오버드라이브는 같은 클래스명 'android.hardware.bydauto.special.BYDAutoSpecialDevice' 로 getInstance 하는데 우리는 null이었다 — 클래스 부재인지, 로드 실패인지 가린다.)
     @SuppressWarnings("deprecation")

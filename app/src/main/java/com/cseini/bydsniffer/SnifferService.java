@@ -73,7 +73,8 @@ public class SnifferService extends Service {
     private volatile int lowVoltFlag = 0;                           // POWER_LOW_VOLTAGE (0=정상, 1=저전압경고)
     private volatile long lowSinceMs = 0;                           // 저전압 플래그가 1로 지속된 시작시각
     private volatile long lowSustainMs = 10L * 60 * 1000;          // 저전압 이만큼 지속돼야 절전(순간노이즈 무시)
-    private volatile String kaStateLast = "", wakeResLast = "", prevKa = "";     // ★614 상시생존 관측 변화 감지용
+    private volatile String kaStateLast = "", wakeResLast = "", prevKa = "", wakeRcLast = "";
+    private long wakeLoopLastEl = 0;     // ★614 상시생존 관측 변화 감지용
     private volatile boolean wakeEnabled = true;                   // 상시생존 on/off (헤드유닛 앱에서 설정)
     private static final long WAKE_LOOP_MS = 2_000L;               // ★연속 루프: 2초마다 wakeUpMcu(Electro wakeUpAfterAccOff 방식)
     private volatile boolean wakeLoopRunning = false;
@@ -800,6 +801,12 @@ public class SnifferService extends Service {
         new Thread(() -> {
             while (wakeLoopRunning && pollRunning) {
                 try {
+                    // ★10-11 절전에서 깨어남 감지 — 이 루프는 2초마다 도는데 간격이 10초 넘게 벌어졌다면 프로세스가 통째로 멈췄다 풀린 것(헤드유닛 절전). 센트리에 알려 프레임이 죽었으면 바로 재시작
+                    long wlEl = android.os.SystemClock.elapsedRealtime();
+                    if (wakeLoopLastEl != 0 && wlEl - wakeLoopLastEl > 10_000L) {
+                        try { com.cseini.bydsniffer.sentry.SentryManager.get().onHostResumed(wlEl - wakeLoopLastEl); } catch (Throwable ignored) {}
+                    }
+                    wakeLoopLastEl = wlEl;
                     // ★v44 사인 진단: 10초마다 심박 저장(commit=동기 디스크) → 다음 시작 때 사망 시각 역산.
                     //   60초마다 워치독 원샷잡 재장전 — 프로세스 죽으면 마지막 장전분이 ≤3분 내 발화해 부활.
                     long hbNow = System.currentTimeMillis();
@@ -838,6 +845,7 @@ public class SnifferService extends Service {
                                     injectPowerContext(p);   // ★v41: wakeUpMcu 직전 mContext(자기+부모, final 포함) 강제 주입 → Context null NPE 방지
                                     Object r = p.getClass().getMethod("wakeUpMcu").invoke(p);
                                     wakeOkCount++;
+                                    if (!String.valueOf(r).equals(wakeRcLast)) { wakeRcLast = String.valueOf(r); if (relay != null) relay.putStatus("wake_rc", wakeRcLast); }   // ★10-11 반환값 그대로(0=성공, wake_mcu의 "ok"는 예외 없음일 뿐) — 새 키, wake_mcu는 그대로
                                     if (!"ok".equals(wakeResLast)) { wakeResLast = "ok"; if (relay != null) relay.putStatus("wake_mcu", "ok ret=" + r); }   // ★614
                                     // ★v84: D1 노이즈 축소 — 시작 시 1회 + 이후 1시간(1800틱×2초)마다 요약만. wakeUpMcu 호출 자체는 매 틱 유지(생존 핵심).
                                     if (!wakeMcuDiagDone || wakeReportTick % 1800 == 0) { wakeMcuDiagDone = true; postToD1("WAKE", "wakeUpMcu OK ret=" + r + " (성공 " + wakeOkCount + "/실패 " + wakeFailCount + ")"); }
@@ -890,7 +898,8 @@ public class SnifferService extends Service {
     private volatile String usbKeepStLast = "";
     private long usbKeepKeyAt = 0, usbKeepCycleAt = 0, usbKeepErrAt = 0;
     private boolean usbKeepWanted() {
-        if (prefs == null || IS_D5) return false;
+        if (prefs == null) return false;
+        if (IS_D5) return d5HoldWanted();   // ★10-11 씨라7 주차 중 유지(D5 hold) — 센트리가 켜져 있을 때만. usbKeepSd(sm mount 루프)는 D5에서 돌지 않게 usbKeepTick에서 막는다
         if (prefs.getBoolean("usb_keep_user", false)) return true;
         com.cseini.bydsniffer.sentry.SentryManager sm = com.cseini.bydsniffer.sentry.SentryManager.get();
         com.cseini.bydsniffer.sentry.SentryStorage st = sm.storage();
@@ -904,18 +913,20 @@ public class SnifferService extends Service {
         String why = !want ? "off" : guardSleep ? "pause:보호(저전압·백스톱)" : ignOn ? "pause:시동 켜짐" : "on:" + (prefs.getBoolean("usb_keep_user", false) ? "수동" : "센트리");
         boolean active = why.startsWith("on:");
         int mode = prefs != null ? prefs.getInt("usb_keep_how", 3) : 3;   // ★758 기본 3(셸 깨우기)
-        boolean dark = active && mode == 3 && prefs.getBoolean("usb_keep_dark", true) && lastGearVal == 3 && !(lastSpeed > 0.5) && lastDriving != 1;   // ★760 기어 P·정지일 때만
+        boolean dark = active && mode == 3 && d5ShellOn() && prefs.getBoolean("usb_keep_dark", true) && lastGearVal == 3 && !(lastSpeed > 0.5) && lastDriving != 1;   // ★760 기어 P·정지일 때만
         if (dark != (usbDarkView != null)) usbKeepDark(dark);
         if (!why.equals(usbKeepStLast)) {
             usbKeepStLast = why;
             if (relay != null) relay.putStatus("usb_keep", why + (active ? "/m" + mode : ""));
             postToD1("USBKEEP", "USB 유지 " + why + (active ? " · 방식 " + (mode == 3 ? "셸 깨우기" : mode == 1 ? "keyevent 224" : mode == 2 ? "잠금+keyevent" : "화면 깨우기 잠금") : ""));
         }
-        usbKeepSd(active, why);
+        if (!IS_D5) usbKeepSd(active, why);
+        d5HoldLevers(active, why);
+        d5ProbeTick();
         if (!active) { releaseUsbKeepLock(); return; }
         long now = System.currentTimeMillis();
         wifiKeepTick(now);
-        if (mode == 3) { releaseUsbKeepLock(); usbKeepShellWake(now); return; }
+        if (mode == 3) { releaseUsbKeepLock(); if (d5ShellOn()) usbKeepShellWake(now); return; }
         if (mode != 1) {
             try {
                 if (usbKeepLock == null) {
@@ -938,6 +949,324 @@ public class SnifferService extends Service {
         }
     }
     private void releaseUsbKeepLock() { try { if (usbKeepLock != null && usbKeepLock.isHeld()) usbKeepLock.release(); } catch (Throwable ignored) {} }
+
+    // ═══ ★10-11 씨라7(DiLink5) 주차 중 유지 — D5 hold (운영자 "오버가 쓰는 것과 우리가 쓰는 걸 동시다발적으로 다 써보자") ═══
+    //   배경: 씨라7은 시동 OFF 뒤 헤드유닛이 약 12분 자고 2~3분 깨는 주기라 센트리 연속 녹화가 시간당 9~16분뿐이었다(024066 밤샘 시험).
+    //   오버드라이브 v54.2의 DiLink5 "주차 중 유지"(Di5ParkedPowerHold, docs/overdrive-braveheart-v54/README.md)의 지렛대를 같은 값으로 전부 쓰고, 우리가 쓰던 셸 깨우기·1901/1902도 같이 쓴다.
+    //   지렛대 비트(D5HoldLogic): 1 전원유지(-1442840502) 2 센트리깃발 782237711/728 4 깃발 1901/1902 8 QNX(차량 네트워크 관리) 16 카메라 하트비트 32 AP 토큰 64 셸 깨우기.
+    //   조건: 씨라7 + 센트리 enabled(ARMED가 아니라 켜짐 — 잠들기 시작하는 순간 풀리면 안 됨) + 시동 OFF + 보호(저전압 지속·백스톱) 아님 + 12V 컷오프 래치 아님.
+    //   끄기/조정: prefs d5_hold(기본 켬)·d5hold_mask(기본 127) — RAW {"d5Hold":false}·{"d5HoldMask":n}. 결과는 relay_state d5hold + D5HOLD 로그.
+    //   해제: 시동 켜짐·센트리 끔·보호·12V 컷오프 때 되돌린다(782 0/2·전원유지 0·카메라 0·AP 토큰 제거·QNX 정지, 시동 켜짐이면 QNX는 바인딩만 끊음). 1901/1902는 오버드라이브도 안 되돌려 우리도 둔다.
+    //   잡은 지렛대는 prefs d5hold_held 비트로 남겨, 앱이 죽었다 살아나도 조건이 어긋나면 그 비트대로 먼저 해제한다.
+    private static final long D5_CAD_MS = 30_000L, D5_CAM_MS = 2_000L;
+    private static final String D5_SPECIAL = "android.hardware.bydauto.special.BYDAutoSpecialDevice";
+    private final Object d5Lock = new Object();
+    private final java.util.concurrent.atomic.AtomicBoolean d5Busy = new java.util.concurrent.atomic.AtomicBoolean(), d5RelBusy = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.LinkedHashMap<String, String> d5Res = new java.util.LinkedHashMap<>();
+    private int d5Held = -1, d5LowStreak = 0, d5RelFails = 0;
+    private long d5LevAt = 0, d5SpecialTryAt = 0, d5StAt = 0;
+    private volatile boolean d5CamRun = false;
+    private Object d5SpecialDev, d5AutoMgr;
+    private String d5SpecialHow = "", d5StLast = "", d5Err = "";
+    private Double d5Volt;
+    private Integer d5Mcu;
+
+    private boolean d5HoldWanted() {
+        return prefs != null && prefs.getBoolean("d5_hold", true) && com.cseini.bydsniffer.sentry.SentryManager.get().enabled();
+    }
+    private int d5Mask() { return prefs == null ? D5HoldLogic.ALL : prefs.getInt("d5hold_mask", D5HoldLogic.ALL); }
+    private boolean d5ShellOn() { return !IS_D5 || (d5Mask() & D5HoldLogic.SHELL) != 0; }
+    private int d5HeldBits() {
+        if (d5Held < 0) d5Held = prefs != null ? prefs.getInt("d5hold_held", 0) : 0;
+        return d5Held;
+    }
+    private void d5SetHeld(int bits) {
+        d5Held = bits;
+        try { prefs.edit().putInt("d5hold_held", bits).apply(); } catch (Throwable ignored) {}
+    }
+    private static String d5Rc(int rc) { return rc == Integer.MIN_VALUE ? "예외" : String.valueOf(rc); }
+
+    // 장치 기능 쓰기 — baseSet과 같은 base set(devType, feature, value)이지만 숫자 반환값(0=성공)을 그대로 돌려준다. 실패는 MIN_VALUE + d5Err
+    private int d5Set(Object dev, int feature, int value) {
+        d5Err = "";
+        if (dev == null) { d5Err = "장치 null"; return Integer.MIN_VALUE; }
+        try {
+            int devType = (Integer) dev.getClass().getMethod("getDevicetype").invoke(dev);
+            java.lang.reflect.Method setM = null;
+            for (Class<?> c = dev.getClass().getSuperclass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                try { setM = c.getDeclaredMethod("set", int.class, int.class, int.class); setM.setAccessible(true); break; }
+                catch (NoSuchMethodException ignored) {}
+            }
+            if (setM == null) { d5Err = "base set(int,int,int) 없음"; return Integer.MIN_VALUE; }
+            Object ret = setM.invoke(dev, devType, feature, value);
+            return ret instanceof Number ? ((Number) ret).intValue() : 0;
+        } catch (Throwable t) {
+            Throwable c = (t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            d5Err = c.getClass().getSimpleName() + ":" + c.getMessage();
+            return Integer.MIN_VALUE;
+        }
+    }
+
+    // 특수 장치: 기존 경로 → D5 로더 → SDK 우선 로더로 컨테이너 APK를 하나씩. 못 잡으면 10분 뒤 다시(결과는 컨테이너별로 한 줄 기록)
+    private Object d5Special() {
+        if (d5SpecialDev != null) return d5SpecialDev;
+        long now = System.currentTimeMillis();
+        if (d5SpecialTryAt != 0 && now - d5SpecialTryAt < 600_000L) return null;
+        d5SpecialTryAt = now;
+        String how = "기존";
+        Object sp = null;
+        try { sp = deviceByName(D5_SPECIAL); } catch (Throwable ignored) {}
+        if (sp == null) { how = "D5로더"; sp = specialViaD5Loader(); }
+        if (sp == null) { how = "컨테이너별"; sp = DiLink5Support.deviceIsolated(this, D5_SPECIAL, vcwRef); }
+        if (sp != null) {
+            injectContext(sp);
+            d5SpecialDev = sp;
+            d5SpecialHow = how + (how.equals("컨테이너별") ? ":" + DiLink5Support.isoReport : "");
+            postToD1("D5HOLD", "SpecialDevice 획득 — " + d5SpecialHow);
+        } else {
+            postToD1("D5HOLD", "SpecialDevice 못 잡음 — " + DiLink5Support.isoReport);
+        }
+        return sp;
+    }
+
+    private Double d5Volts() {
+        try {
+            double v = devDbl(deviceByName("android.hardware.bydauto.ota.BYDAutoOtaDevice"), "getBatteryPowerVoltage");
+            return Double.isNaN(v) ? null : v;
+        } catch (Throwable t) { return null; }
+    }
+    private Integer d5McuStatus() {
+        try {
+            Object p = deviceByName("power");
+            if (p == null) return null;
+            Object r = p.getClass().getMethod("getMcuStatus").invoke(p);
+            return r instanceof Number ? ((Number) r).intValue() : null;
+        } catch (Throwable t) { return null; }
+    }
+
+    // 파노라마 작업 모드(1031/1306529812) — BYDAutoManager("auto")의 setInt. 오버드라이브는 이 하트비트를 2초마다 쓴다(기본 꺼짐 옵션)
+    private int d5Panorama(int value) {
+        d5Err = "";
+        try {
+            Object m = d5AutoMgr;
+            if (m == null) { m = getSystemService("auto"); d5AutoMgr = m; }
+            if (m == null) { d5Err = "auto 서비스 없음"; return Integer.MIN_VALUE; }
+            Object r = m.getClass().getMethod("setInt", int.class, int.class, int.class).invoke(m, 1031, 1306529812, value);
+            if (r instanceof Integer) return (Integer) r;
+            return (r instanceof Boolean && !((Boolean) r)) ? -1 : 0;
+        } catch (Throwable t) {
+            Throwable c = (t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            d5Err = c.getClass().getSimpleName() + ":" + c.getMessage();
+            d5AutoMgr = null;
+            return Integer.MIN_VALUE;
+        }
+    }
+    private void d5CamStart() {
+        if (d5CamRun) return;
+        d5CamRun = true;
+        new Thread(() -> {
+            String last = "";
+            while (d5CamRun) {
+                int rc = d5Panorama(1);
+                String r = d5Rc(rc) + (rc == Integer.MIN_VALUE ? "(" + d5Err + ")" : "");
+                if (!r.equals(last)) { last = r; synchronized (d5Res) { d5Res.put("cam", r); } postToD1("D5HOLD", "카메라 하트비트 PANORAMA_WORK_MODE_SET=1 rc=" + r); }
+                try { Thread.sleep(D5_CAM_MS); } catch (InterruptedException e) { break; }
+            }
+        }, "d5hold-cam").start();
+    }
+
+    private boolean d5OverdriveInstalled() {
+        try { getPackageManager().getPackageInfo("com.overdrive.app", 0); return true; } catch (Throwable t) { return false; }
+    }
+    private static final String D5_AP_APPLY = "CUR=$(getprop vendor.peripheral.shutdown_critical_list); echo \"BEFORE=$CUR\"; case \" $CUR \" in *\" ovdrv \"*) ;; *) setprop vendor.peripheral.shutdown_critical_list \"${CUR:+$CUR }ovdrv\" || { echo RC=2; exit 2; };; esac; setprop vendor.peripheral.ovdrv.state ONLINE || { echo RC=3; exit 3; }; [ \"$(getprop vendor.peripheral.ovdrv.state)\" = ONLINE ] || { echo RC=4; exit 4; }; NEW=$(getprop vendor.peripheral.shutdown_critical_list); echo \"AFTER=$NEW\"; case \" $NEW \" in *\" ovdrv \"*) echo RC=0;; *) echo RC=5;; esac";
+    private static final String D5_AP_RELEASE = "setprop vendor.peripheral.ovdrv.state OFFLINE; CUR=$(getprop vendor.peripheral.shutdown_critical_list); NEW=\"\"; for t in $CUR; do [ \"$t\" = \"ovdrv\" ] || NEW=\"${NEW:+$NEW }$t\"; done; [ \"$NEW\" = \"$CUR\" ] || setprop vendor.peripheral.shutdown_critical_list \"$NEW\"; echo \"LIST=$(getprop vendor.peripheral.shutdown_critical_list)\"; echo RC=0";
+    private static String d5RcOf(String out) {
+        if (out == null) return "셸 안 붙음";
+        int i = out.lastIndexOf("RC=");
+        return i < 0 ? "RC없음" : out.substring(i + 3).trim();
+    }
+
+    // ═══ ★10-11 씨라7 절전 진단(읽기 전용, 모든 D5) — 오버드라이브가 깔린 차에서 "안 죽고 오래 버텼다"는 제보를 데이터로 맞춰 보기 위해(운영자 "최대한 할 수 있는 거 다")
+    //   시작 90초 뒤 1회 + 1시간마다: 오버드라이브 설치·버전, AP 보유 목록(vendor.peripheral.shutdown_critical_list)과 ovdrv.state, sys.byd.power_mode, 오버드라이브 프로세스 수,
+    //   오버드라이브 주차 유지 상태 파일(이름에 keepalive가 든 것) 앞부분, 우리 쪽 MCU 상태·12V. 설정은 하나도 바꾸지 않는다. 로그 D5PROBE + relay_state d5probe.
+    private long d5ProbeAt = 0, d5ProbeStart = 0;
+    private final java.util.concurrent.atomic.AtomicBoolean d5ProbeBusy = new java.util.concurrent.atomic.AtomicBoolean();
+    private void d5ProbeTick() {
+        if (!IS_D5 || prefs == null) return;
+        long now = System.currentTimeMillis();
+        if (d5ProbeStart == 0) d5ProbeStart = now;
+        if (now - d5ProbeStart < 90_000L || (d5ProbeAt != 0 && now - d5ProbeAt < 3_600_000L)) return;
+        if (!d5ProbeBusy.compareAndSet(false, true)) return;
+        d5ProbeAt = now;
+        new Thread(() -> {
+            try {
+                String ver = "미설치";
+                try { ver = getPackageManager().getPackageInfo("com.overdrive.app", 0).versionName; } catch (Throwable ignored) {}
+                String out = AdbAccess.runShell(this, "echo L=$(getprop vendor.peripheral.shutdown_critical_list); echo S=$(getprop vendor.peripheral.ovdrv.state); echo P=$(getprop sys.byd.power_mode); echo N=$(ps -A 2>/dev/null | grep -c overdrive); "
+                        + "F=$(find /data/local/tmp /sdcard/Android/data/com.overdrive.app -maxdepth 3 -name '*keepalive*' 2>/dev/null | head -1); echo FP=$F; [ -n \"$F\" ] && echo FC=$(head -c 300 \"$F\" | tr '\\n' ' ')");
+                Double v = d5Volts();
+                Integer mcu = d5McuStatus();
+                String line = "od=" + ver + " mcu=" + mcu + " v=" + (v == null ? "?" : String.format(java.util.Locale.US, "%.1f", v)) + " rc=" + wakeRcLast + " | " + (out == null ? "셸 안 붙음" : out.trim().replace('\n', ' '));
+                if (line.length() > 700) line = line.substring(0, 700);
+                postToD1("D5PROBE", line);
+                if (relay != null) relay.putStatus("d5probe", line.length() > 220 ? line.substring(0, 220) : line);
+            } catch (Throwable t) {
+                postToD1("D5PROBE", "진단 예외 " + t);
+            } finally { d5ProbeBusy.set(false); }
+        }, "d5probe").start();
+    }
+
+    // 2초 틱 — 가벼운 판정만. 30초마다 워커에서 지렛대를 다시 확언하고, 조건이 어긋나면 해제 워커를 띄운다
+    private void d5HoldLevers(boolean active, String why) {
+        if (!IS_D5 || prefs == null) return;
+        boolean ignOn = why.startsWith("pause:시동");
+        if (ignOn && prefs.getBoolean("d5hold_latch", false)) { prefs.edit().putBoolean("d5hold_latch", false).apply(); d5LowStreak = 0; }   // 시동이 켜지면 12V 컷오프 래치 해제
+        boolean latched = prefs.getBoolean("d5hold_latch", false);
+        long now = System.currentTimeMillis();
+        int pwr = powerLevelNow();
+        boolean ignKnownOff = pwr >= 0 ? pwr == 0 : (relay != null && relay.ignitionState() == 0);   // 시동 OFF가 확실할 때만 잡는다(미확정이면 주행 중 쓰기를 막기 위해 해제 쪽)
+        if (active && !ignKnownOff) { active = false; if (!ignOn) why = "pause:시동 상태 미확정"; }
+        if (!active || latched) {
+            d5LowStreak = 0;
+            if ((d5HeldBits() != 0 || d5CamRun) && d5RelBusy.compareAndSet(false, true)) {
+                final String rw = ignOn ? "시동 켜짐" : latched ? "12V 컷오프 래치" : why;
+                final boolean detachOnly = ignOn;
+                new Thread(() -> { try { d5HoldRelease(rw, detachOnly); } finally { d5RelBusy.set(false); } }, "d5hold-rel").start();
+            }
+            d5PublishStatus(latched ? "latch" : why.startsWith("pause") ? why.substring(6) : "off", now);
+            return;
+        }
+        if (now - d5LevAt >= D5_CAD_MS && d5Busy.compareAndSet(false, true)) {
+            d5LevAt = now;
+            new Thread(() -> { try { d5Reassert(); } catch (Throwable t) { postToD1("D5HOLD", "확언 예외 " + t); } finally { d5Busy.set(false); } }, "d5hold").start();
+        }
+    }
+
+    private void d5Reassert() {
+        synchronized (d5Lock) {
+            int mask = d5Mask(), held = d5HeldBits();
+            long now = System.currentTimeMillis();
+            // 12V — 연속 3표본 11.8V 미만이면 컷오프+래치(시동 켜지면 해제). 표본이 없으면 기존 저전압 가드·백스톱만 믿는다
+            d5Volt = d5Volts();
+            d5LowStreak = D5HoldLogic.voltStreak(d5LowStreak, d5Volt, D5HoldLogic.CUTOFF_V);
+            if (D5HoldLogic.cutoffReached(d5LowStreak)) {
+                try { prefs.edit().putBoolean("d5hold_latch", true).apply(); } catch (Throwable ignored) {}
+                postToD1("D5HOLD", "12V 컷오프 — " + d5Volt + "V 연속 " + d5LowStreak + "회 < " + D5HoldLogic.CUTOFF_V + "V → 해제·래치(시동 켜면 풀림)");
+                return;   // 해제는 다음 틱(래치)에서
+            }
+            d5Mcu = d5McuStatus();
+            synchronized (d5Res) {
+                if ((mask & D5HoldLogic.MCUPOWER) != 0) {
+                    int rc = d5Set(deviceByName("power"), -1442840502, 1);
+                    d5Res.put("mp", d5Rc(rc) + (rc == Integer.MIN_VALUE ? "(" + d5Err + ")" : ""));
+                    if (rc == 0) held |= D5HoldLogic.MCUPOWER;
+                }
+                if ((mask & (D5HoldLogic.FLAGS782 | D5HoldLogic.FLAGS1901)) != 0) {
+                    Object sp = d5Special();
+                    if (sp == null) d5Res.put("sp", "null");
+                    else {
+                        d5Res.remove("sp");
+                        if ((mask & D5HoldLogic.FLAGS782) != 0) {
+                            int a = d5Set(sp, 782237711, 1), b = d5Set(sp, 782237728, 1);
+                            d5Res.put("f782", d5Rc(a) + "/" + d5Rc(b) + (a == Integer.MIN_VALUE ? "(" + d5Err + ")" : ""));
+                            if (a == 0 || b == 0) held |= D5HoldLogic.FLAGS782;
+                        }
+                        if ((mask & D5HoldLogic.FLAGS1901) != 0) {
+                            int a = d5Set(sp, 1901, 1), b = d5Set(sp, 1902, 1);
+                            d5Res.put("f1901", d5Rc(a) + "/" + d5Rc(b) + (a == Integer.MIN_VALUE ? "(" + d5Err + ")" : ""));
+                            // 1901/1902는 해제하지 않으므로 held 비트는 세우지 않는다(D5HoldLogic.releaseList 참고)
+                        }
+                    }
+                }
+            }
+            if ((mask & D5HoldLogic.QNX) != 0) {
+                int q = D5QnxNet.control(this, 0);
+                synchronized (d5Res) { d5Res.put("qnx", String.valueOf(q)); }
+                if (q >= 0) held |= D5HoldLogic.QNX;
+            }
+            if ((mask & D5HoldLogic.CAM) != 0) {
+                d5CamStart();
+                String c; synchronized (d5Res) { c = d5Res.get("cam"); }
+                if ("0".equals(c)) held |= D5HoldLogic.CAM;
+            }
+            if ((mask & D5HoldLogic.AP) != 0) {
+                String ap;
+                if (d5OverdriveInstalled()) ap = "skip:오버드라이브 설치됨";
+                else {
+                    String out = AdbAccess.runShell(this, D5_AP_APPLY + " 2>&1");
+                    String rc = d5RcOf(out);
+                    ap = "0".equals(rc) ? "held" : "denied(" + rc + ")";
+                    if ("0".equals(rc)) held |= D5HoldLogic.AP;
+                    else if (out != null && !d5Res.getOrDefault("ap", "").startsWith("denied")) postToD1("D5HOLD", "AP hold 거부 — " + out.replace('\n', ' '));
+                }
+                synchronized (d5Res) { d5Res.put("ap", ap); }
+            }
+            d5SetHeld(held);
+            d5PublishStatus("on", now);
+        }
+    }
+
+    private void d5HoldRelease(String why, boolean detachOnly) {
+        synchronized (d5Lock) {
+            int held = d5HeldBits();
+            if (held == 0 && !d5CamRun) { d5RelFails = 0; return; }
+            postToD1("D5HOLD", "해제(" + why + ") 잡고 있던 것: " + D5HoldLogic.releaseList(held) + (d5CamRun ? " 카메라하트비트" : ""));
+            int left = 0;
+            StringBuilder rs = new StringBuilder();
+            boolean camWas = d5CamRun;
+            d5CamRun = false;
+            if ((held & D5HoldLogic.CAM) != 0 || camWas) {
+                int rc = d5Panorama(0);
+                rs.append("cam=").append(d5Rc(rc)).append(' ');
+                if (rc != 0 && (held & D5HoldLogic.CAM) != 0) left |= D5HoldLogic.CAM;
+            }
+            if ((held & D5HoldLogic.FLAGS782) != 0) {
+                Object sp = d5SpecialDev != null ? d5SpecialDev : d5Special();   // 앱이 재시작됐으면 장치를 다시 얻어 되돌린다
+                int a = d5Set(sp, 782237711, 0), b = d5Set(sp, 782237728, 2);
+                rs.append("782=").append(d5Rc(a)).append('/').append(d5Rc(b)).append(' ');
+                if (a != 0 || b != 0) left |= D5HoldLogic.FLAGS782;
+            }
+            if ((held & D5HoldLogic.MCUPOWER) != 0) {
+                int rc = d5Set(deviceByName("power"), -1442840502, 0);
+                rs.append("mp=").append(d5Rc(rc)).append(' ');
+                if (rc != 0) left |= D5HoldLogic.MCUPOWER;
+            }
+            if ((held & D5HoldLogic.AP) != 0) {
+                String rc = d5RcOf(AdbAccess.runShell(this, D5_AP_RELEASE + " 2>&1"));
+                rs.append("ap=").append(rc).append(' ');
+                if (!"0".equals(rc)) left |= D5HoldLogic.AP;
+            }
+            if ((held & D5HoldLogic.QNX) != 0) {
+                if (detachOnly) { D5QnxNet.detach(this); rs.append("qnx=detach "); }
+                else {
+                    int q = D5QnxNet.control(this, 1);
+                    D5QnxNet.detach(this);
+                    rs.append("qnx=").append(q).append(' ');
+                }
+            }
+            if (left != 0 && ++d5RelFails < 10) d5SetHeld(left);   // 되돌리기 실패분은 다음 틱에 다시(최대 10번)
+            else { d5SetHeld(0); d5RelFails = 0; }
+            synchronized (d5Res) { d5Res.clear(); }
+            postToD1("D5HOLD", "해제 결과 " + rs.toString().trim() + (left != 0 ? " — 남은 비트 " + left + " 재시도" : ""));
+        }
+    }
+
+    // relay_state d5hold 한 줄 + 바뀔 때·10분마다 D5HOLD 로그
+    private void d5PublishStatus(String mode, long now) {
+        StringBuilder sb = new StringBuilder(mode);
+        sb.append(" m=").append(d5Mask()).append(" h=").append(d5HeldBits());
+        if (d5Volt != null) sb.append(" v=").append(String.format(java.util.Locale.US, "%.1f", d5Volt));
+        if (d5Mcu != null) sb.append(" mcu=").append(d5Mcu);
+        synchronized (d5Res) { for (java.util.Map.Entry<String, String> e : d5Res.entrySet()) sb.append(' ').append(e.getKey()).append('=').append(e.getValue()); }
+        String st = sb.toString();
+        if (st.length() > 220) st = st.substring(0, 220);
+        if (!st.equals(d5StLast)) {
+            boolean modeChanged = !d5StLast.startsWith(mode + " ");
+            d5StLast = st;
+            if (relay != null) relay.putStatus("d5hold", st);
+            if (modeChanged || now - d5StAt > 600_000L) { d5StAt = now; postToD1("D5HOLD", st + (d5SpecialHow.isEmpty() ? "" : " sp=" + d5SpecialHow)); }
+        }
+    }
     // ★766 USB 유지 중 SD 다시 올리기(센트리 세션 18:15 운영자 차 실측) — BYD StorageManagerService가 시동 OFF +5초에 외장 볼륨을 언마운트하는데,
     //   셸 깨우기(759+)로 허브가 잠들지 않으면 재열거가 없어 SD가 unmounted로 남는다(허브·카드 리더는 붙어 있음, 셸 `sm mount public:8,97`로 바로 올라옴).
     //   유지가 시작되고 약 10초 뒤부터 45초마다 `sm list-volumes public`에서 unmounted인 볼륨을 `sm mount`.
@@ -4663,8 +4992,7 @@ public class SnifferService extends Service {
         if (p.has("d5on") || p.has("d5map")) {
             android.content.SharedPreferences.Editor e = prefs.edit();
             if (p.has("d5on")) e.putBoolean("d5_assist", p.optBoolean("d5on", false));
-            org.json.JSONObject m = p.optJSONObject("d5map");
-            if (m != null) e.putInt("d5_slot_rear", m.optInt("rear", 2) & 3).putInt("d5_slot_left", m.optInt("left", 3) & 3).putInt("d5_slot_right", m.optInt("right", 1) & 3);
+            if (p.has("d5map")) postToD1("CLUSTER", "씨라7 칸 고르기 값 " + p.optJSONObject("d5map") + " — 칸은 고정 배치라 쓰지 않음");   // ★874
             e.apply();
             loadD5Slots(); ccamGen++; publishClusterCamCfg();
             int[] s = d5Slot;
@@ -4741,16 +5069,17 @@ public class SnifferService extends Service {
             String lay = clusterCam.revLayout();
             all.put("rlay", lay).put("rev3", !"A".equals(lay));   // ★734 후진 화면 A·B·C(옛 폰은 rev3: B·C=좌·후·우로 보임)
             all.put("revD", true);   // ★747 후진 D(좌·우만)를 아는 릴레이 — 앱은 이게 있을 때만 D를 고르게 한다
-            if (!IS_D5) all.put("revAdj", true);   // ★751 후진 왼쪽·오른쪽 화면(82·84)을 조정할 수 있는 릴레이 — 앱은 이게 있을 때만 조정 버튼을 보인다
+            if (IS_D5) all.put("revD5", true);   // ★874 씨라7도 후진 좌·우 — 옛 씨라7 릴레이(revD는 있지만 후방 칸만)와 구분
+            all.put("revAdj", true);   // ★751 후진 왼쪽·오른쪽 화면(82·84)을 조정할 수 있는 릴레이 — 앱은 이게 있을 때만 조정 버튼을 보인다
             all.put("lens", true);   // ★712 clusterCfgJson과 같음(원격 편집기용)
             all.put("proj2", true);   // ★718 가로 직선(proj=2) 지원 — 페이지가 이 표시 없는 옛 릴레이면 안내하고 후방 추천값을 원근으로
             org.json.JSONObject def = new org.json.JSONObject();   // ★718 저장값 없을 때 실제로 쓰는 기본(추천) 화면 — 페이지가 조정 시작값으로 보여 줌
             for (int sd : new int[]{2, 4, 8}) def.put(String.valueOf(sd), new org.json.JSONObject(IS_D5 ? D5_WHOLE : ccamDefault(sd)));
-            if (!IS_D5) for (int sd : new int[]{82, 84}) def.put(String.valueOf(sd), new org.json.JSONObject(ccamDefault(sd)));   // ★751 후진 왼쪽·오른쪽 기본
+            for (int sd : new int[]{82, 84}) def.put(String.valueOf(sd), new org.json.JSONObject(IS_D5 ? D5_WHOLE : ccamDefault(sd)));   // ★751 후진 왼쪽·오른쪽 기본 ★874 씨라7은 칸 전체
             all.put("def", def);
             if (IS_D5) {   // ★745 씨라7 보조 켬·칸 배치(set=차주가 고른 적 있음) — 앱 설정 화면이 이 값으로 그린다
                 int[] s = d5Slot;
-                all.put("d5", new org.json.JSONObject().put("on", prefs.getBoolean("d5_assist", false)).put("set", prefs.contains("d5_slot_rear"))
+                all.put("d5", new org.json.JSONObject().put("on", prefs.getBoolean("d5_assist", false)).put("set", true)
                         .put("rear", s[0]).put("left", s[1]).put("right", s[2]));
             }
             relay.putStatus("ccam_cfg", all.toString());
@@ -9860,10 +10189,11 @@ public class SnifferService extends Service {
     //   칸 번호 0=왼쪽 위·1=오른쪽 위·2=왼쪽 아래·3=오른쪽 아래(FastCamQuadBackend 자리). 기본은 코드 추정(cam0=앞·1=오른쪽·2=뒤·3=왼쪽).
     private static final boolean IS_D5 = DiLink5Support.isDiLink5();   // 시스템 속성 읽기라 프레임마다 부르지 않게 한 번만
     static volatile int[] d5Slot = {2, 3, 1};   // 후방, 왼쪽, 오른쪽
-    private void loadD5Slots() {
-        if (prefs == null) return;
-        d5Slot = new int[]{prefs.getInt("d5_slot_rear", 2) & 3, prefs.getInt("d5_slot_left", 3) & 3, prefs.getInt("d5_slot_right", 1) & 3};
-    }
+    // ★874 씨라7 칸은 고정 — QCarCam 입력 번호가 방향에 묶여 있다(0=앞·1=오른쪽·2=후방·3=왼쪽, 오버드라이브 설정 docs/overdrive-analysis/23, 비틀도 고르기 없이 맞음).
+    //   예전엔 차주가 고르게 했는데, 고르는 화면이 칸 배치(자리 바꾸기)를 적용한 채 보여 줘 고른 값이 엉뚱한 카메라였다(운영자 10-11 "좌측에 전방·우측에 후방", "골라도 안 된대").
+    //   저장된 고른 값은 쓰지 않는다.
+    private void loadD5Slots() { d5Slot = new int[]{2, 3, 1}; }
+    private static int d5SlotBit(int side) { int[] r = tileRect(1920, 1300, side); return 1 << ((r[0] > 0 ? 1 : 0) + (r[1] > 0 ? 2 : 0)); }   // ★874 씨라7 4분할 칸 번호 비트
     private static int[] tileRect(int w, int h, int side) {
         // ★871 side 1=전방(링크락 런처 카메라 띠) — 후·좌·우가 아닌 남은 한 칸(실차 확인 필요)
         if (w >= 4 * h) { int tw = w / 4; int idx = side == 8 ? 0 : side == 2 ? 1 : side == 1 ? 3 : 2; return new int[]{idx * tw, 0, tw, h}; }
@@ -10069,35 +10399,36 @@ public class SnifferService extends Service {
         // ★751 후진 왼쪽(82)·오른쪽(84) 화면 — 차주가 실시간 카메라 조정 화면에서 맞춘 값(ccam_82·84), 없으면 747~750 고정 화면과 같은 기본값.
         com.cseini.motiondetect.ViewWarp revSideWarp(int sd, int[] tile, int qw, int qh, int dw, int dh) {
             String v = ccamOf(sd);
-            if (v.isEmpty()) v = ccamDefault(sd);
+            if (v.isEmpty()) v = IS_D5 ? D5_WHOLE : ccamDefault(sd);   // ★874 씨라7은 렌즈 미확인 — 칸 전체 그대로
             try { return customWarp(new org.json.JSONObject(v), tile, qw, qh, dw, dh); }
             catch (org.json.JSONException e) { throw new IllegalStateException("후진 화면 설정 읽기 실패 side=" + sd, e); }
         }
         byte[] encodeRev(byte[] nv21, int w, int h, int q) {
-            if (rvBroken || IS_D5) return null;   // ★745 후진 A·B·C는 돌핀 렌즈로 맞춘 화면 — 씨라7은 후방 칸(또는 차주 조정값) 그대로
+            if (rvBroken) return null;   // ★874 씨라7도 후진 좌·우(D) — 기본은 칸 전체 그대로(아래 revSideWarp), 차주가 조정하면 그 값
+            final int RW = REV_W, RH = IS_D5 ? 300 : REV_H;   // ★874 씨라7 칸 전체(960x650)가 찌그러지지 않게 반쪽(444) 비율로 높이 300
             try {
                 String lay = revLayout(), key = lay + "|" + w + "x" + h + "|" + ccamGen;   // ★751 후진 왼쪽·오른쪽 조정값이 바뀌면 다시 만든다
                 if (!key.equals(rvKey)) {
                     if (rvWarps != null) for (com.cseini.motiondetect.ViewWarp v : rvWarps) if (v != null) v.close();
                     rvKey = key;
                     int[] xs = new int[3];
-                    rvWarps = revWarps(lay, w, h, REV_W, REV_H, xs);
+                    rvWarps = revWarps(lay, w, h, RW, RH, xs);
                     rvXs = java.util.Arrays.copyOf(xs, rvWarps.length);
                     rvBuf = new byte[rvWarps.length][];
                     for (int i = 0; i < rvWarps.length; i++) rvBuf[i] = new byte[rvWarps[i].width() * rvWarps[i].height() * 3 / 2];
-                    rvCanvas = new byte[REV_W * REV_H * 3 / 2];
-                    java.util.Arrays.fill(rvCanvas, REV_W * REV_H, rvCanvas.length, (byte) 128);   // 칸 사이 검정(Y 0·VU 128)
-                    postToD1("CLUSTER", "후진 화면 " + lay + " 적용 출력=" + REV_W + "x" + REV_H + " 칸=" + rvWarps.length + " 프레임=" + w + "x" + h);
+                    rvCanvas = new byte[RW * RH * 3 / 2];
+                    java.util.Arrays.fill(rvCanvas, RW * RH, rvCanvas.length, (byte) 128);   // 칸 사이 검정(Y 0·VU 128)
+                    postToD1("CLUSTER", "후진 화면 " + lay + " 적용 출력=" + RW + "x" + RH + " 칸=" + rvWarps.length + " 프레임=" + w + "x" + h);
                 }
                 for (int i = 0; i < rvWarps.length; i++) {
                     com.cseini.motiondetect.ViewWarp v = rvWarps[i];
                     if (!v.remap(nv21, w, h, rvBuf[i])) { rvBroken = true; postToD1("CLUSTER", "후진 화면 remap 실패 칸=" + i + " — 이번 세션은 후방 커스텀 뷰로"); return null; }
                     int pw = v.width(), ph = v.height(), x0 = rvXs[i];
-                    for (int y = 0; y < ph; y++) System.arraycopy(rvBuf[i], y * pw, rvCanvas, y * REV_W + x0, pw);
-                    for (int y = 0; y < ph / 2; y++) System.arraycopy(rvBuf[i], pw * ph + y * pw, rvCanvas, REV_W * REV_H + y * REV_W + x0, pw);
+                    for (int y = 0; y < ph; y++) System.arraycopy(rvBuf[i], y * pw, rvCanvas, y * RW + x0, pw);
+                    for (int y = 0; y < ph / 2; y++) System.arraycopy(rvBuf[i], pw * ph + y * pw, rvCanvas, RW * RH + y * RW + x0, pw);
                 }
                 java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream(96 * 1024);
-                new android.graphics.YuvImage(rvCanvas, android.graphics.ImageFormat.NV21, REV_W, REV_H, null).compressToJpeg(new android.graphics.Rect(0, 0, REV_W, REV_H), q, bo);
+                new android.graphics.YuvImage(rvCanvas, android.graphics.ImageFormat.NV21, RW, RH, null).compressToJpeg(new android.graphics.Rect(0, 0, RW, RH), q, bo);
                 return bo.toByteArray();
             } catch (Throwable t) {
                 rvBroken = true; rvKey = "";
@@ -10136,6 +10467,7 @@ public class SnifferService extends Service {
             if (inR) {
                 display = 8; side = 8; stopAtMs = 0;
                 if (!active && (clusterCamClients > 0 || huShow(8))) { if (!takeFromIdleRtc(ts)) start(8, ts); }   // ★728 헤드유닛 창도 카메라를 연다
+                if (IS_D5 && huShow(8)) avmWindowProbe();
             } else if (display == 8) {
                 Object v = relay != null ? relay.getStatus("turnflash") : null;   // 후진 해제 시 깜빡이 켜져 있으면 그쪽으로 승계
                 int tf = (v instanceof Integer) ? (Integer) v : 1;
@@ -10147,7 +10479,31 @@ public class SnifferService extends Service {
         // ★728 헤드유닛 카메라 창 — 켜 둔 상황(깜빡이/후진)이고 '모든 자동 기능 정지'가 아니면 띄운다.
         private boolean huShow(int sd) { return huOverlay != null && !allStopOn() && huOverlay.wants(sd); }
         /** ★748 후진 화면 D(좌·우만)면 헤드유닛엔 왼쪽·오른쪽 따로 창(폰은 나란히 한 장). 씨라7은 A·B·C·D를 안 씀. */
-        boolean revSplit() { return !IS_D5 && "D".equals(revLayout()); }
+        // ★874 씨라7 순정 AVM이 우리 창(앱 오버레이)을 덮는다(운영자 10-11) — 순정 화면이 안드로이드 창인지(종류·소유 앱), 칩이 맨 위에 바로 그리는지 가리려고
+        //   후진 3초 뒤 화면 위 창 목록(위에서부터)을 읽어 둔다. 읽기만 한다. 10분에 1번, 결과는 서버 상태 avm_win에도(공유판도 피드백 없이 보이게).
+        private volatile long avmProbeAt = 0;
+        private void avmWindowProbe() {
+            long now = System.currentTimeMillis();
+            if (now - avmProbeAt < 600_000L) return;
+            avmProbeAt = now;
+            new Thread(() -> {
+                try {
+                    Thread.sleep(3000);
+                    String out = AdbAccess.runShell(SnifferService.this, "dumpsys window windows 2>/dev/null | grep -E '^  Window #|ty=|isOnScreen=true|mHasSurface=true' | grep -B1 -A2 'Window #' | head -60");
+                    StringBuilder sb = new StringBuilder();
+                    String cur = null;
+                    if (out != null) for (String ln : out.split("\n")) {
+                        ln = ln.trim();
+                        if (ln.startsWith("Window #")) { int a2 = ln.indexOf('{'), b2 = ln.lastIndexOf('}'); cur = a2 >= 0 && b2 > a2 ? ln.substring(a2 + 1, b2) : ln; cur = cur.replaceAll("^\\S+ u0 ", ""); }
+                        else if (cur != null && ln.contains("ty=")) { int t = ln.indexOf("ty="); String ty = ln.substring(t + 3).split("[\\s}]")[0]; sb.append(cur).append('[').append(ty).append("] "); cur = null; if (sb.length() > 600) break; }
+                    }
+                    String r = sb.length() == 0 ? "창 목록 못 읽음" : sb.toString().trim();
+                    postToD1("HUASSIST", "씨라7 후진 3초 뒤 화면 위 창(위부터): " + r);
+                    if (relay != null) relay.putStatus("avm_win", r.length() > 300 ? r.substring(0, 300) : r);
+                } catch (Throwable t) { postToD1("HUASSIST", "씨라7 후진 창 목록 읽기 실패 " + t.getClass().getSimpleName()); }
+            }, "avm-probe").start();
+        }
+        boolean revSplit() { return "D".equals(revLayout()); }   // ★874 씨라7도(운영자 10-11 "후진 보조에 좌우 카메라를 분리·가로·세로로")
         /** ★815 후진 D 헤드유닛 배치 — 0=왼쪽·오른쪽 따로 창(기본) · 1=가로로 붙인 한 창 · 2=세로로 붙인 한 창(왼쪽이 위). 폰이 HUASSIST rev_arr로 정한다. */
         int revArr() { return prefs == null ? 0 : Math.max(0, Math.min(2, prefs.getInt("hu_rev_arr", 0))); }
         private void huDisplay(int sd) {
@@ -10435,6 +10791,10 @@ public class SnifferService extends Service {
                         publishNv(nv21, w, h);
                     }, (tag, m) -> postToD1("CLUSTER", "씨라7 카메라 " + m));
                     if (!ok) { postToD1("CLUSTER", "씨라7 보조 카메라 시작 실패(캡처 데몬)"); return; }
+                    // ★874 씨라7 보조 카메라 끊김(운영자 10-11 "프레임이 너무 끊긴다") — 4분할 합성이 150ms 간격(최대 6.7fps)에 매번 4칸 전체를 자바로 변환했다.
+                    //   보조 창은 칸 하나만 보므로 그 칸만 변환하고 간격을 카메라 속도(20fps)에 맞춘다. 칸은 아래 루프가 표시 방향에 따라 바꾼다.
+                    d5q.setEmitInterval(prefs != null ? prefs.getInt("d5_assist_emit_ms", 45) : 45);
+                    d5q.setSlotMask(0);
                 } else {   // ★745 아래는 돌핀 AVMCamera(그대로)
                 if (bmmLoader == null) {
                     java.io.File jar = new java.io.File("/system/framework/bmmcamera.jar");
@@ -10543,6 +10903,7 @@ public class SnifferService extends Service {
                 final int q = prefs != null ? prefs.getInt("cluster_cam_q", 42) : 42;
                 final int minMs = prefs != null ? prefs.getInt("cluster_cam_ms", 30) : 30;
                 int lastFc = 0; long lastEnc = 0; boolean first = true;
+                int d5Mask = -1, d5MaskFc = 0;
                 // ★570 튜닝 근거용 실측 — 5초마다 평균 인코딩ms·평균 크기·실제 fps를 남긴다(추측으로 더 낮추지 않기 위해).
                 long statT0 = System.currentTimeMillis(); int statN = 0; long statEncMs = 0, statBytes = 0; int statFc0 = fc[0]; int statSf0 = surfFc;
                 int stallFc = 0; long stallAt = tOpen;
@@ -10553,11 +10914,15 @@ public class SnifferService extends Service {
                     if (fc[0] != stallFc) { stallFc = fc[0]; stallAt = now; }
                     else if (fc[0] > 0 && now - stallAt > 5000) { postToD1("CLUSTER", "카메라 프레임 5초 멈춤 — 닫고 다시 열기"); break; }   // ★729 상시 대기는 세션이 길어 중간에 멈추면 시동 끌 때까지 죽은 채 남는다(다시 열기는 keepTick)
                     // ★570 예열 중(display==0)엔 인코딩·전송을 하지 않는다 — 카메라만 열어둬 다음 트리거가 즉시 뜨게.
+                    if (d5q != null) {   // ★874 씨라7 — 지금 보는 칸만 변환(편집 원본처럼 다른 칸이 필요하면 잠시 전체). 바뀐 뒤 프레임부터 인코딩
+                        int m = now < fullCopyUntil ? 0xF : display == 0 ? 0 : display == 8 && revSplit() ? d5SlotBit(2) | d5SlotBit(4) : d5SlotBit(display);   // 후진 좌·우는 두 칸
+                        if (m != d5Mask) { d5Mask = m; d5q.setSlotMask(m); d5MaskFc = fc[0] + 1; lastCopyPartial = m != 0xF; }
+                    }
                     if (!IS_D5) bsdExp.feedFromCluster(latestNv[0], meta[0], meta[1]);   // ★603 BSD 기록 실험 — 클러스터 쿼드 프레임 공유(예열 중 포함) ★745 돌핀 칸 배치 전용
                     if (display == 0 || !watched()) { try { Thread.sleep(20); } catch (InterruptedException e) { break; } continue; }   // ★729 보는 사람(폰·헤드유닛 창) 없으면 인코딩 안 함
                     side = display;   // 트리거가 바꾼 표시 대상을 크롭에 반영(세션 중 전환)
                     byte[] f = latestNv[0]; int fcNow = fc[0];
-                    if (f == null || fcNow == lastFc || meta[0] <= 0 || now - lastEnc < minMs) { try { Thread.sleep(10); } catch (InterruptedException e) { break; } continue; }
+                    if (f == null || fcNow == lastFc || meta[0] <= 0 || now - lastEnc < minMs || (d5q != null && fcNow <= d5MaskFc)) { try { Thread.sleep(10); } catch (InterruptedException e) { break; } continue; }
                     lastFc = fcNow; lastEnc = now;
                     long encT0 = System.currentTimeMillis();
                     byte[] jpg = side == 8 ? encodeRev(f, meta[0], meta[1], q) : null;   // ★734 후진 화면 A·B·C(실패 시 아래 후방 커스텀 뷰)
@@ -11014,8 +11379,14 @@ public class SnifferService extends Service {
                     int pct = tok.length >= 4 ? Integer.parseInt(tok[3]) : 50;
                     res = SplitLauncher.split(this, tok[1], tok[2], pct, log);
                 } else if (tok[0].equals("SPLITRATIO") && tok.length >= 2) res = SplitLauncher.applyRatio(this, Integer.parseInt(tok[1]), log);
-                else if (tok[0].equals("LAUNCHFF") && tok.length >= 6) res = SplitLauncher.launchFreeform(this, tok[1], Integer.parseInt(tok[2]), Integer.parseInt(tok[3]), Integer.parseInt(tok[4]), Integer.parseInt(tok[5]), log);
-                else if (tok[0].equals("WINRESIZE") && tok.length >= 6) res = SplitLauncher.resizeTask(this, tok[1], Integer.parseInt(tok[2]), Integer.parseInt(tok[3]), Integer.parseInt(tok[4]), Integer.parseInt(tok[5]), log);
+                else if ((tok[0].equals("LAUNCHFF") || tok[0].equals("WINRESIZE")) && tok.length >= 6) {
+                    // ★874 제목줄(□ ×) 숨김 — 제목줄은 띄운 앱 창이 그려 밖에서 끌 수 없어, 창 위쪽을 제목줄 높이만큼 더 올려 런처 상단바(오버레이 창) 뒤에 깐다.
+                    //   앱 내용은 영역을 꽉 채운다(운영자 10-11 "x 버튼 안 보이고 해당 영역 내 무조건 최대화"). 7번째 값으로 높이(px)를 줄 수 있고 0이면 보정 안 함.
+                    int cap = tok.length >= 7 ? Integer.parseInt(tok[6]) : SplitLauncher.captionPx(this);
+                    int l = Integer.parseInt(tok[2]), t = Integer.parseInt(tok[3]) - cap, r = Integer.parseInt(tok[4]), b = Integer.parseInt(tok[5]);
+                    log.append("제목줄 보정 ").append(cap).append("px\n");
+                    res = tok[0].equals("LAUNCHFF") ? SplitLauncher.launchFreeform(this, tok[1], l, t, r, b, log) : SplitLauncher.resizeTask(this, tok[1], l, t, r, b, log);
+                }
                 else if (tok[0].equals("WINFRONT") && tok.length >= 2) res = SplitLauncher.bringFront(this, tok[1], log);
                 else res = "형식 오류: " + action;
             } catch (Throwable t) { res = "예외 " + t.getClass().getSimpleName() + ":" + t.getMessage(); }
@@ -12670,7 +13041,9 @@ public class SnifferService extends Service {
                 android.content.SharedPreferences.Editor e = prefs.edit();
                 if (params.has("usbKeep")) e.putBoolean("usb_keep_user", params.optBoolean("usbKeep"));
                 if (params.has("wifiKeep")) e.putBoolean("wifi_keep_user", params.optBoolean("wifiKeep"));   // ★820 시동 꺼도 와이파이 유지(USB 유지 동작 중에만)
-                if (params.has("usbKeepMode")) e.putInt("usb_keep_how", Math.max(0, Math.min(3, params.optInt("usbKeepMode", 3))));   // ★758 3=셸 깨우기
+                if (params.has("usbKeepMode")) e.putInt("usb_keep_how", Math.max(0, Math.min(3, params.optInt("usbKeepMode", 3))));
+                if (params.has("d5Hold")) e.putBoolean("d5_hold", params.optBoolean("d5Hold"));   // ★10-11 씨라7 주차 중 유지(D5 hold) 전체 스위치(기본 켬)
+                if (params.has("d5HoldMask")) e.putInt("d5hold_mask", Math.max(0, Math.min(D5HoldLogic.ALL, params.optInt("d5HoldMask", D5HoldLogic.ALL))));   // 지렛대 비트(1전원유지 2깃발782 4깃발1901 8QNX 16카메라 32AP 64셸깨우기)   // ★758 3=셸 깨우기
                 if (params.has("usbKeepDark")) e.putBoolean("usb_keep_dark", params.optBoolean("usbKeepDark"));   // ★760 USB 유지 중 화면 끄기(기본 켬)
                 e.apply();
                 usbKeepStLast = "";   // 다음 틱(2초)에 상태 다시 알림

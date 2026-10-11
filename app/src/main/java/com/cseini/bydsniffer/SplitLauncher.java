@@ -335,6 +335,15 @@ final class SplitLauncher {
         boolean ok = cmd(ctx, "am task resize " + task + " " + l + " " + t + " " + r + " " + b, log);
         return (ok ? "자유 창 OK task=" : "자유 창은 떴지만 크기 실패 task=") + task + " " + p;
     }
+    // ★874 자유 창 제목줄 높이(px) — 시스템 내부 값을 먼저 찾고, 없으면 안드로이드 기본 32dp
+    static int captionPx(Context ctx) {
+        android.content.res.Resources rs = android.content.res.Resources.getSystem();
+        for (String n : new String[]{"freeform_decor_caption_height", "decor_caption_height"}) {
+            int id = rs.getIdentifier(n, "dimen", "android");
+            if (id != 0) return rs.getDimensionPixelSize(id);
+        }
+        return Math.round(32 * ctx.getResources().getDisplayMetrics().density);
+    }
     static String resizeTask(Context ctx, String target, int l, int t, int r, int b, StringBuilder log) {
         int task = target.matches("\\d+") ? Integer.parseInt(target) : taskState(ctx, target)[0];
         if (task < 0) return "실패 창 없음 " + target;

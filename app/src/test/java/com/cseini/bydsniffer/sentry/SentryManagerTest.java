@@ -105,6 +105,14 @@ public class SentryManagerTest {
     }
 
     @Test
+    public void resumeRestartNeeded_onlyWhenFramesWentQuiet() {
+        assertFalse(SentryManager.resumeRestartNeeded(0));
+        assertFalse(SentryManager.resumeRestartNeeded(5_000L));
+        assertTrue(SentryManager.resumeRestartNeeded(5_001L));
+        assertTrue(SentryManager.resumeRestartNeeded(780_000L));
+    }
+
+    @Test
     public void remoteMonthOk_acceptsOnlyValidYearMonth() {
         assertTrue(SentryManager.remoteMonthOk("2026-10"));
         assertTrue(SentryManager.remoteMonthOk("2026-01"));

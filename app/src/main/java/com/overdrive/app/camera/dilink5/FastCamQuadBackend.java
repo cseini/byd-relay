@@ -164,7 +164,7 @@ public final class FastCamQuadBackend {
             if (now - firstTileMs < PARTIAL_WAIT_MS) return;
             if (!partialLogged) { partialLogged = true; logi("★부분 합성 시작 — " + have + "/4칸 도착(빈 칸 검정), 늦게 오는 채널은 도착 즉시 채움"); }
         }
-        if (now - lastEmit < EMIT_MIN_INTERVAL_MS) return;
+        if (now - lastEmit < emitMinMs) return;
         lastEmit = now;
         // ★653 빠진 칸 다시 열기(운영자 09-29 승인) — 6초 진단 뒤 포기하던 것. 20초·60초에 아직 빠진 칸이 있으면 캡처 데몬을 다시 띄워 전 채널 재시도
         //   (이전 데몬 종료 확인 후 띄움). 들어온 칸은 마지막 화면을 유지하므로 잠깐 멈췄다 이어진다. 세션당 최대 2회.
@@ -192,6 +192,17 @@ public final class FastCamQuadBackend {
                 finally { retrying = false; }
             }, "quad-retry").start();
         }
+        if (snap30 == null && now - firstTileMs >= 30000) snap30 = camFrames.clone();
+        int mask = slotMask;
+        if (mask != 0xF) {   // ★874 보는 칸만 — 4칸 합성·전체 변환(자바 2.5M 화소) 없이 그 칸만 순환 버퍼에 바로 변환
+            byte[] nv = nvPool[nvPi];
+            if (nv == null) { nv = new byte[CANVAS_W * CANVAS_H * 3 / 2]; nvPool[nvPi] = nv; }
+            nvPi = (nvPi + 1) % nvPool.length;
+            for (int s = 0; s < 4; s++) if ((mask >> s & 1) != 0) tileToNv21(tileHas[s] ? tileRgba[s] : placeholder(), (s % 2) * TILE_W, (s / 2) * TILE_H, nv);
+            if (!snapDone && now - firstTileMs >= 40000) { snapDone = true; logi("★40초 칸 검사:" + tileReport() + " · 녹색 띠 검사 생략(보는 칸만 변환 중)"); }
+            try { if (sink != null) sink.onFrame(nv, CANVAS_W, CANVAS_H); } catch (Throwable ignore) {}
+            return;
+        }
         for (int slot = 0; slot < 4; slot++) {
             int qx = (slot % 2) * TILE_W, qy = (slot / 2) * TILE_H;
             byte[] tile = tileHas[slot] ? tileRgba[slot] : placeholder();   // ★653 빈칸 = "카메라 준비 중" 안내(검정 대신)
@@ -207,15 +218,9 @@ public final class FastCamQuadBackend {
         //   (공유판은 카메라 영상 업로드 금지라 이미지는 안 올린다.) 색 성분이 0인 녹색 띠 = RGBA에선 R·B≈0·G 높음, NV21에선 V·U 바이트=0.
         //   RGBA에 띠 있음=원본·합성 / NV21에만=변환 / 둘 다 없음=크기 조정·인코더 단계.
         // ★652 칸별 검정/멈춤 — 30초에 칸별 프레임 수를 적어 두고 40초에 비교(증가 0=멈춤), 칸 평균 밝기<12=검정. (FB1332 일부 칸 누락·내일은맑음 좌측만 빠짐)
-        if (snap30 == null && now - firstTileMs >= 30000) snap30 = camFrames.clone();
         if (!snapDone && now - firstTileMs >= 40000) {
             snapDone = true;
-            StringBuilder tiles = new StringBuilder();
-            for (int s = 0; s < 4; s++) {
-                int luma = lumaOf(tileRgba[s]), inc = snap30 != null ? camFrames[s] - snap30[s] : -1;
-                tiles.append(" cam").append(QUAD_ORDER[s]).append('=').append(!tileHas[s] ? "미도착" : luma < 12 ? "검정" : inc == 0 ? "멈춤" : "정상").append("(밝기").append(luma).append(",10초간").append(inc).append("장)");
-            }
-            final String tileRep = tiles.toString();
+            final String tileRep = tileReport();
             final byte[] rgba = canvasRgba.clone(), yuv = nv21.clone();
             new Thread(() -> {
                 try { logi("★40초 칸 검사:" + tileRep + " · 녹색 띠(인코딩 전) — RGBA:" + greenColsRgba(rgba) + " · NV21:" + zeroChromaColsNv21(yuv)); }
@@ -225,6 +230,37 @@ public final class FastCamQuadBackend {
         try { if (sink != null) sink.onFrame(nv21, CANVAS_W, CANVAS_H); } catch (Throwable ignore) {}
     }
     private boolean snapDone = false;
+    // canvasLock 보유 상태에서 호출 — 칸별 도착·검정·멈춤(30초 시점 대비 10초간 장 수)
+    private String tileReport() {
+        StringBuilder tiles = new StringBuilder();
+        for (int s = 0; s < 4; s++) {
+            int luma = lumaOf(tileRgba[s]), inc = snap30 != null ? camFrames[s] - snap30[s] : -1;
+            tiles.append(" cam").append(QUAD_ORDER[s]).append('=').append(!tileHas[s] ? "미도착" : luma < 12 ? "검정" : inc == 0 ? "멈춤" : "정상").append("(밝기").append(luma).append(",10초간").append(inc).append("장)");
+        }
+        return tiles.toString();
+    }
+    // ★874 칸 하나(RGBA 960x650)를 합성 화면 NV21(1920x1300)의 제자리로 바로 변환 — DiLink5QCarCamBackend.rgbaToNv21과 같은 식
+    static void tileToNv21(byte[] t, int qx, int qy, byte[] out) {
+        final int ySize = CANVAS_W * CANVAS_H;
+        for (int j = 0; j < TILE_H; j++) {
+            int p = j * TILE_W * 4, o = (qy + j) * CANVAS_W + qx;
+            for (int i = 0; i < TILE_W; i++, p += 4) {
+                int r = t[p] & 0xFF, g = t[p + 1] & 0xFF, b = t[p + 2] & 0xFF;
+                out[o + i] = (byte) (((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
+            }
+        }
+        for (int j = 0; j < TILE_H; j += 2) {
+            int o = ySize + ((qy + j) >> 1) * CANVAS_W + qx;
+            for (int i = 0; i < TILE_W; i += 2) {
+                int p = (j * TILE_W + i) * 4;
+                int r = t[p] & 0xFF, g = t[p + 1] & 0xFF, b = t[p + 2] & 0xFF;
+                int u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+                int v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+                out[o + i] = (byte) (v < 0 ? 0 : v > 255 ? 255 : v);
+                out[o + i + 1] = (byte) (u < 0 ? 0 : u > 255 ? 255 : u);
+            }
+        }
+    }
     private static int lumaOf(byte[] t) {
         long sum = 0; int n = 0;
         for (int o = 0; o + 2 < t.length; o += 4 * 97) { sum += (t[o] & 0xff) + (t[o + 1] & 0xff) + (t[o + 2] & 0xff); n++; }
@@ -243,6 +279,14 @@ public final class FastCamQuadBackend {
     // ★653 다시 열기는 실시간 보기에만 — 움직임 감지 세션에서 데몬을 재기동하면 4칸이 한꺼번에 바뀌어 움직임 오감지(motion 오발) 위험.
     private volatile boolean retryEnabled = false;
     public void setRetryEnabled(boolean on) { retryEnabled = on; }
+    // ★874 보조 카메라(깜빡이·후진 창)용 — 내보내는 간격과 변환할 칸(비트 0~3 = 칸 0~3, 0xF = 지금처럼 4칸 전체 합성).
+    //   기본은 예전 그대로(150ms·전체)라 센트리·실시간 보기·움직임 감지는 바뀌지 않는다.
+    private volatile long emitMinMs = EMIT_MIN_INTERVAL_MS;
+    private volatile int slotMask = 0xF;
+    private final byte[][] nvPool = new byte[3][];
+    private int nvPi = 0;
+    public void setEmitInterval(long ms) { emitMinMs = Math.max(20, ms); }
+    public void setSlotMask(int m) { slotMask = m & 0xF; }
     private int retries = 0;
     private volatile boolean retrying = false;
     private byte[] placeholderRgba = null;
