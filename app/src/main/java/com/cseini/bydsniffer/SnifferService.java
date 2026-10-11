@@ -2729,6 +2729,7 @@ public class SnifferService extends Service {
             Log.i(TAG, "relay 시작 uid=" + uid + " vin=..." + (vin.length() > 4 ? vin.substring(vin.length() - 4) : vin));
             announceAutostartTargets("릴레이 시작");   // ★시작 시마다 오토스타트 자동해제 대상 명시(로그+상태)
             startSysRestartDiag();   // ★706 시스템 재시작 진단(읽기 전용, 2시간 1회)
+            startD5SeatWatch825();   // ★825 씨라7 좌석 착석·뒷좌석 벨트 읽기 ★881 되살림(동승자 미하차 잠금 보류용)
             putAutotripVer();   // ★710 오토전비 설치 여부(버전) 상태 보고
             wakeAutotripAsync("릴레이 시작");   // ★723 청소로 같이 죽은 오토전비 깨우기
             if (relay != null) relay.putStatus("cam_off", camOffOn());   // ★카메라 기능 끔 상태(폰 메뉴 숨김 기준)
@@ -2775,6 +2776,94 @@ public class SnifferService extends Service {
     // ★706 시스템 재시작 진단(읽기 전용) — 10-02 씨라7에서 커널 재부팅 없이 프레임워크가 다시 뜨는(BOOT_COMPLETED 재수신) 일이 공유판 701 설치 뒤 급증.
     //   서버 로그로는 원인 코드를 못 가려, 기기 dropbox의 system_server 기록(watchdog·crash·SYSTEM_RESTART)을 2시간에 한 번 D1로 올린다. 아무것도 바꾸지 않는다.
     //   공유판은 postToD1 버퍼를 우회(LIFE와 동일) — 사용자가 로그를 보내지 않아도 도착해야 집계가 된다. 보낸 뒤에만 스로틀을 기록(실패·조기 종료 땐 다음 시작에 재시도).
+    // ★881 847(공유판 d5를 운영자판 소스로)에서 빠졌던 것을 되살림 — 앱 "동승자 미하차 시 자동 잠금 보류"(아이폰 1001)가 이 값(seat_pass 등)이 있어야 보인다(운영자 10-12 "씨라7 동승자 미하차 보류가 없어졌대")
+    // ★825 씨라7 좌석 착석 읽기 1단계(운영자 10-07 'ㄱㄱ', 피드백 세션 요청) — 관측만, 동작 무변경. 실차 문서 경로(카페 작성자 씨라7 성공):
+    //   TsManagerImpl.getInstance(Context) → getSettingAdapterManager() → getPassengerState*(1 빈·2 앉음, 벨트와 무관). 이름과 자리가 엇갈림:
+    //   BackLeft=2열 운전석 뒤, BackRight=2열 중앙, BackMid=2열 조수석 뒤(그대로 둠). 뒷좌석 벨트 getLeft/Center/RightRearSafebeltStatus(2 맴·1 풂).
+    //   ★TsManagerImpl은 09-09 메인 스레드 리스너 등록에서 ClassCastException 무한 크래시 전례 → 리스너 없이 게터만, 별도 스레드, 모든 단계 예외 기록,
+    //   실패 시 10분·이후 1시간 간격 재시도. 목적: 시동 OFF 직전·OFF 뒤 1·5·15분 값이 살아 있는지(돌핀 벨트는 OFF 뒤 굳었던 전례).
+    //   ★838 seat_ts(5초마다 지금 시각) 삭제 — 값이 매번 바뀌어 주차 중 상태 전체를 하루 약 5천 번 다시 올렸다(차당 모바일 약 24MB/일, 10-10 DATAUSE). 앱·서버 미사용.
+    private static final String[][] D5SEAT = {
+            {"seat_pass", "getPassengerStatePassenger"}, {"seat_rl", "getPassengerStateBackLeft"}, {"seat_rc", "getPassengerStateBackRight"}, {"seat_rr", "getPassengerStateBackMid"},
+            {"belt_drv", "getDriverBeltStatus"}, {"belt_rl", "getLeftRearSafebeltStatus"}, {"belt_rc", "getCenterRearSafebeltStatus"}, {"belt_rr", "getRightRearSafebeltStatus"}};
+    private void startD5SeatWatch825() {
+        if (!DiLink5Support.isDiLink5()) return;
+        new Thread(() -> {
+            try { Thread.sleep(120_000); } catch (InterruptedException e) { return; }
+            StringBuilder ps = new StringBuilder();
+            for (String p : new String[]{"BYDAUTO_SETTING_COMMON", "BYDAUTO_SETTING_GET", "BYDAUTO_SAFETY_BELT_COMMON", "BYDAUTO_SAFETY_BELT_GET"})
+                ps.append(p.substring(8)).append('=').append(checkSelfPermission("android.permission." + p) == android.content.pm.PackageManager.PERMISSION_GRANTED ? "허용 " : "거부 ");
+            postToD1("D5SEAT", "권한 " + ps.toString().trim());
+            Object mgr = null; java.lang.reflect.Method[] ms = new java.lang.reflect.Method[D5SEAT.length];
+            long retryAt = 0, offAt = 0, logWin = 0; int attempt = 0, logN = 0, lastPw = -99; boolean[] offDone = new boolean[3];
+            String lastVals = null;
+            while (true) {
+                long now = System.currentTimeMillis();
+                try {
+                    if (mgr == null && now >= retryAt) {
+                        attempt++;
+                        mgr = d5SeatManager825(attempt);
+                        if (mgr == null) retryAt = now + (attempt < 3 ? 600_000L : 3_600_000L);
+                        else {
+                            StringBuilder miss = new StringBuilder();
+                            for (int i = 0; i < D5SEAT.length; i++) {
+                                try { ms[i] = mgr.getClass().getMethod(D5SEAT[i][1]); } catch (NoSuchMethodException e) { miss.append(D5SEAT[i][1]).append(' '); }
+                            }
+                            postToD1("D5SEAT", "읽을 메서드 " + (miss.length() == 0 ? "전부 있음" : "없음: " + miss.toString().trim()));
+                        }
+                    }
+                    if (mgr != null && relay != null) {
+                        StringBuilder vals = new StringBuilder();
+                        for (int i = 0; i < D5SEAT.length; i++) {
+                            if (ms[i] == null) continue;
+                            String v;
+                            try { Object r = ms[i].invoke(mgr); v = String.valueOf(r); if (r instanceof Number) relay.putStatus(D5SEAT[i][0], ((Number) r).intValue()); }
+                            catch (Throwable t) { v = "예외:" + rootMsg(t); }
+                            vals.append(D5SEAT[i][0]).append('=').append(v).append(' ');
+                        }
+                        String cur = vals.toString().trim();
+                        int pw = powerLevelNow();
+                        if (lastPw == 2 && pw != 2) { offAt = now; offDone = new boolean[3]; postToD1("D5SEAT", "시동 OFF — 직전 값 " + (lastVals == null ? "?" : lastVals) + " · 지금 " + cur); }
+                        if (pw == 2) offAt = 0;
+                        lastPw = pw;
+                        if (offAt > 0) {
+                            long[] mins = {1, 5, 15};
+                            for (int k = 0; k < 3; k++)
+                                if (!offDone[k] && now - offAt >= mins[k] * 60_000L) { offDone[k] = true; postToD1("D5SEAT", "시동 OFF 뒤 " + mins[k] + "분 값 " + cur + " · 시동=" + pw); }
+                        }
+                        if (!cur.equals(lastVals)) {
+                            if (now - logWin > 3_600_000L) { logWin = now; logN = 0; }
+                            if (++logN <= 40) postToD1("D5SEAT", (lastVals == null ? "처음 " : "변화 ") + cur + " · 시동=" + pw + " 속도=" + (Double.isNaN(lastSpeed) ? "?" : String.valueOf((int) Math.round(lastSpeed))));
+                            lastVals = cur;
+                        }
+                    }
+                } catch (Throwable t) { postToD1("D5SEAT", "루프 예외 " + t.getClass().getSimpleName() + ":" + rootMsg(t)); }
+                try { Thread.sleep(mgr != null ? 5_000 : 30_000); } catch (InterruptedException e) { return; }
+            }
+        }, "d5seat825").start();
+    }
+    private Object d5SeatManager825(int attempt) {
+        String step = "TsManagerImpl 클래스";
+        try {
+            Class<?> c = DiLink5Support.loadD5Class(this, "android.hardware.bydauto.TsManagerImpl");
+            if (c == null) { postToD1("D5SEAT", "시도" + attempt + " " + step + " 없음(로더 null)"); return null; }
+            step = "getInstance(Context)";
+            Object ts = c.getMethod("getInstance", Context.class).invoke(null, vcwRef != null ? vcwRef : this);
+            if (ts == null) { postToD1("D5SEAT", "시도" + attempt + " " + step + " = null"); return null; }
+            step = "getSettingAdapterManager()";
+            Object sam = ts.getClass().getMethod("getSettingAdapterManager").invoke(ts);
+            if (sam == null) { postToD1("D5SEAT", "시도" + attempt + " " + step + " = null"); return null; }
+            StringBuilder names = new StringBuilder();
+            for (java.lang.reflect.Method m : sam.getClass().getMethods())
+                if (m.getParameterTypes().length == 0 && java.util.regex.Pattern.compile("(?i)passenger|belt|seat|occup").matcher(m.getName()).find()) names.append(m.getName()).append(' ');
+            postToD1("D5SEAT", "시도" + attempt + " 획득 OK " + sam.getClass().getName() + " · 관련 메서드 " + names.toString().trim());
+            return sam;
+        } catch (Throwable t) {
+            Throwable r = t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null ? t.getCause() : t;
+            postToD1("D5SEAT", "시도" + attempt + " " + step + " 실패 " + r.getClass().getName() + ":" + r.getMessage());
+            return null;
+        }
+    }
     private void startSysRestartDiag() {
         new Thread(() -> {
             try {
@@ -4577,35 +4666,33 @@ public class SnifferService extends Service {
     private int cdrFeat(Object dev, String name) {
         try { return dev == null ? NA : getFeatureInt(dev, featureIdByName(name)); } catch (Throwable t) { return NA; }
     }
-    // ★주행 녹화 영상 맨 위 둘째 띠의 주행 정보 한 줄(운영자 10-11 "순정 블랙박스처럼") — 이미 캐시된 값만 읽는다(프레임마다 BYD getter를 부르지 않음). ASCII 대문자 토큰:
-    //   기어 P/R/N/D · 속도 KM/H · 깜빡이 <L / R> / <HAZ> · 등화 POS(차폭) LOW(하향) HIGH(상향) RFOG(뒤 안개) · 브레이크 BRK · 가속 ACC N%.
-    //   벨트·AEB·고장 경고는 값의 뜻을 실차로 확인하지 못해 뺐다(순정 블랙박스 항목이지만 미검증). 브레이크·가속은 순정과 같은 getter인데 돌핀에서 값이 읽힌 기록이 아직 없어 읽힐 때만 나온다.
-    private String driveOsdLine() {
-        StringBuilder sb = new StringBuilder(64);
+    // ★주행 녹화 영상 맨 위 둘째 띠의 주행 정보(운영자 10-11 "순정 블랙박스처럼 같은 항목·같은 아이콘") — 이미 캐시된 값만 읽는다(프레임마다 BYD getter를 부르지 않음).
+    //   기어 P/R/N/D · 속도 · 깜빡이 · 하향·상향·차폭·뒤 안개등 · 브레이크 · 가속(0~10) · 벨트. 값이 한 번도 읽힌 적 없는 항목은 -1(그림을 그리지 않음).
+    //   브레이크·가속은 순정과 같은 getter인데 돌핀에서 값이 읽힌 기록이 아직 없어 읽힐 때만 나온다. AEB·고장 경고(순정은 그림 있음)는 읽는 신호를 아직 몰라 뺐다.
+    private com.cseini.bydsniffer.sentry.DriveInfo buildDriveInfo() {
+        com.cseini.bydsniffer.sentry.DriveInfo di = new com.cseini.bydsniffer.sentry.DriveInfo();
         int g = lastGearVal;
-        sb.append(g == 3 ? 'P' : g == 1 ? 'R' : g == 2 ? 'D' : g == 0 ? 'N' : '-');
+        di.gear = g == 3 ? 'P' : g == 1 ? 'R' : g == 2 ? 'D' : g == 0 ? 'N' : '-';
         double sp = lastSpeed;
-        sb.append("  ").append(Double.isNaN(sp) ? "--" : String.valueOf(Math.max(0L, Math.round(sp)))).append("KM/H");
+        di.speedKmh = Double.isNaN(sp) ? -1 : (int) Math.max(0L, Math.round(sp));
         Object tf = relay != null ? relay.getStatus("turnflash") : null;
         if (tf instanceof Integer) {
             int t = (Integer) tf;
-            if (t == 2) sb.append("  <L");
-            else if (t == 4) sb.append("  R>");
-            else if (t == 6) sb.append("  <HAZ>");
+            di.turn = t == 2 ? 1 : t == 4 ? 2 : t == 6 ? 3 : 0;
         }
         Integer b = cdrLast.get("brake_pedal");
-        if (b != null && b == 1) sb.append("  BRK");
+        if (b != null) di.brake = b == 1 ? 1 : 0;
         Integer a = cdrLast.get("accel_pct");
-        if (a != null && a > 0) sb.append("  ACC ").append(Math.min(100, a)).append('%');
-        StringBuilder li = new StringBuilder();
-        if (cdrOn("side_light")) li.append(" POS");
-        if (cdrOn("low_beam_ls")) li.append(" LOW");
-        if (cdrOn("high_beam_ls")) li.append(" HIGH");
-        if (cdrOn("rear_fog")) li.append(" RFOG");
-        if (li.length() > 0) sb.append(" ").append(li);
-        return sb.toString();
+        if (a != null) di.accel = Math.min(10, Math.max(0, Math.round(a / 10f)));
+        Integer v;
+        if ((v = cdrLast.get("side_light")) != null) di.pos = v == 1 ? 1 : 0;
+        if ((v = cdrLast.get("low_beam_ls")) != null) di.low = v == 1 ? 1 : 0;
+        if ((v = cdrLast.get("high_beam_ls")) != null) di.high = v == 1 ? 1 : 0;
+        if ((v = cdrLast.get("rear_fog")) != null) di.fogRear = v == 1 ? 1 : 0;
+        if ((v = cdrLast.get("belt_main")) != null) di.belt = v == 1 ? 1 : 0;
+        return di;
     }
-    private boolean cdrOn(String key) { Integer v = cdrLast.get(key); return v != null && v == 1; }
+    private String driveOsdLine() { return buildDriveInfo().toText(); }
     private void cdrPut(String key, int v, String src) {
         if (v == NA || v == -1 || v == Integer.MIN_VALUE || v == -2147482648) return;
         Integer prev = cdrLast.get(key);
@@ -5302,6 +5389,7 @@ public class SnifferService extends Service {
             @Override public int batteryPct() { return lastTripSoc; }
             @Override public String runShell(String cmd) { return AdbAccess.runShell(SnifferService.this, cmd); }
             @Override public String driveOsdText() { return drive ? driveOsdLine() : null; }
+            @Override public com.cseini.bydsniffer.sentry.DriveInfo driveInfo() { return drive ? buildDriveInfo() : null; }
             @Override public boolean parkedStill() { return lastGearVal == 3 && lastDriving != 1 && !(lastSpeed > 0.5); }   // ★씨라7 외장 포맷 허용 조건 — 기어 P·속도 0·주행 아님
             @Override public float[] objectScores(byte[] nv21, int w, int h) { return sentryObjectScores(nv21, w, h); }
             @Override public float[][] objectDetect(byte[] nv21, int w, int h, int rx, int ry, int rw, int rh, float minScore) { return sentryObjectDetect(nv21, w, h, rx, ry, rw, rh, minScore); }

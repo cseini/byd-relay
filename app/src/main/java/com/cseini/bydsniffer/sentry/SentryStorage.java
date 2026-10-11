@@ -68,7 +68,10 @@ public final class SentryStorage {
         this.ctx = ctx;
         this.settings = s;
         this.folder = folder;
+        this.otherFolder = "Drive".equals(folder) ? "Sentry" : "Drive";
     }
+
+    private final String otherFolder;   // 같은 저장소를 나눠 쓰는 반대쪽(센트리↔주행 녹화) 폴더 — 점유량 표시용으로만 읽는다
 
     // 이벤트 진행 중 루트를 고정한다 — 고정 중에는 폴더 재검사·외장 복귀 재시도를 하지 않는다
     public synchronized void pin() {
@@ -163,6 +166,7 @@ public final class SentryStorage {
             vols.put(removableJson("sd", rem.size() > 0 ? rem.get(0) : null, "sd".equals(settings.storage)));
             vols.put(removableJson("usb", rem.size() > 1 ? rem.get(1) : null, "usb".equals(settings.storage)));
             o.put("volumes", vols);
+            o.put("otherKind", "Drive".equals(folder) ? "sentry" : "drive");   // 각 볼륨의 usedByOtherMb가 어느 쪽 것인지(이 상태가 센트리면 drive, 주행 녹화면 sentry)
             o.put("estimateHours", estimateJson(limit, settings));
             File idir = internalDir();   // 내장 임시 저장 상한·하한(운영자 10-11) — 앱이 슬라이더 옆에 보여 주고, 하한에 걸리면 알린다
             long iUsed = dirSize(idir) / MB;
@@ -630,7 +634,30 @@ public final class SentryStorage {
         o.put("totalMb", totalMb(dir));
         o.put("freeMb", freeMb(dir));
         o.put("usedBySentryMb", dirSize(dir) / MB);
+        o.put("usedByOtherMb", otherUsedMbInternal());
         return o;
+    }
+
+    // 반대쪽(센트리↔주행 녹화)이 이 저장소에서 쓰는 양 — 앱이 "센트리 N · 주행 M · 남음 K"로 보여 줄 수 있게(운영자 10-11). 폴더가 없으면 0
+    private long otherUsedMbInternal() {
+        long b = 0;
+        File ext = ctx.getExternalFilesDir(null);
+        if (ext != null) b += dirSize(new File(ext, otherFolder));
+        b += dirSize(new File(ctx.getFilesDir(), otherFolder));
+        return b / MB;
+    }
+
+    private long otherUsedMbOn(Vol v) {
+        long b = dirSize(new File(new File(v.path, "LinkLock"), otherFolder));
+        File[] dirs = ctx.getExternalFilesDirs(null);
+        if (dirs != null) {
+            for (File f : dirs) {
+                if (f == null) continue;
+                String p = f.getPath();
+                if (p.startsWith(v.path + "/") || (v.uuid != null && p.contains("/" + v.uuid + "/"))) b += dirSize(new File(f, otherFolder));
+            }
+        }
+        return b / MB;
     }
 
     private JSONObject removableJson(String kind, Vol v, boolean selected) throws JSONException {
@@ -645,6 +672,7 @@ public final class SentryStorage {
             o.put("totalMb", 0);
             o.put("freeMb", 0);
             o.put("usedBySentryMb", 0);
+            o.put("usedByOtherMb", 0);
             return o;
         }
         // 선택하지 않은 볼륨에는 폴더를 만들지 않는다(probeWritable은 mkdirs 포함) — 이미 있는 폴더만 확인
@@ -661,6 +689,7 @@ public final class SentryStorage {
         o.put("totalMb", totalMb(statDir));
         o.put("freeMb", freeMb(statDir));
         o.put("usedBySentryMb", target != null ? dirSize(target) / MB : (pub.isDirectory() ? dirSize(pub) / MB : 0));
+        o.put("usedByOtherMb", otherUsedMbOn(v));
         return o;
     }
 

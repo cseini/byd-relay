@@ -22,6 +22,7 @@ public interface SentryHost {
     default boolean camOff() { return false; }   // 앱 설정에서 카메라 기능을 꺼 둠(cam_off) — 센트리는 카메라를 못 쓰므로 IDLE로 쉰다(켜질 때까지 1분마다 무장 시도·실패 로그가 쌓이지 않게)
     default int batteryPct() { return -1; }
     default String runShell(String cmd) { return null; }   // 차 셸(shell uid) 1회 실행 — 출력, 셸에 못 붙으면 null. 외장 포맷(sm format)에만 쓴다
+    default DriveInfo driveInfo() { return null; }   // 주행 녹화 영상 위 둘째 띠에 그릴 주행 정보(기어·속도·깜빡이·등화·브레이크·가속·벨트). 모르면 null
     default String driveOsdText() { return null; }   // 주행 녹화 영상 맨 위에 찍을 주행 정보 한 줄(ASCII 토큰, 호스트가 2Hz 안팎으로 갱신해 둔 값을 읽기만 한다) — 모르면 null
     default boolean parkedStill() { return false; }   // 기어 P·속도 0·주행 아님 — 씨라7 외장 포맷 허용 조건(씨라7 USB·SD는 차 전원이 켜져 있을 때만 붙고 시동 판정은 믿기 어려워 기어·속도로 본다)
     default float[] objectScores(byte[] nv21, int w, int h) { return null; }   // 4칸 각각에서 잰 {사람 최고 점수, 차량 최고 점수}(0~1), 모델이 없거나 실패면 null — null이면 거르지 않고 통과(안전 쪽)

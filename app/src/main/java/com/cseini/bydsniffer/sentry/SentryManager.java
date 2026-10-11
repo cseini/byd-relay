@@ -1785,9 +1785,9 @@ public final class SentryManager {
                     log("칸별 어안 보정 켬 — 칸 " + s.cellViews.names() + " 표 생성 " + (SystemClock.elapsedRealtime() - dt0) + "ms");
                 }
             }
-            if (s.osdDatetime || s.osdBattery) {
+            if (s.osdDatetime || s.osdBattery || (drive && s.osdDrive)) {
                 final SentryHost osdHost = host;
-                final SentryOsd osd = new SentryOsd(s.osdDatetime, s.osdBattery, s.osdPos, osdHost::batteryPct, drive && s.osdDrive ? osdHost::driveOsdText : null);   // 주행 녹화는 맨 위 둘째 띠에 주행 정보(기어·속도·깜빡이·등화·브레이크·가속)
+                final SentryOsd osd = new SentryOsd(s.osdDatetime, s.osdBattery, s.osdPos, osdHost::batteryPct, drive && s.osdDrive ? osdHost::driveOsdText : null, drive && s.osdDrive ? osdHost::driveInfo : null);   // 주행 녹화는 맨 위 둘째 띠에 주행 정보(기어·속도·깜빡이·등화·브레이크·가속)
                 final AtomicBoolean osdFailLogged = new AtomicBoolean();
                 e.setOverlay((buf, ow, oh, wall) -> {
                     try {

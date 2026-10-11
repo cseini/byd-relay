@@ -172,6 +172,77 @@ public class SentryDriveTest {
         assertTrue(SentryUiPage.kindSwitch("", "2026-10-11").contains("href='/sentry/ui?kind=drive&date=2026-10-11'>주행"));
     }
 
+    @Test
+    public void driveInfo_toText_listsOnlyWhatIsKnownAndOn() {
+        DriveInfo d = new DriveInfo();
+        d.gear = 'D'; d.speedKmh = 58; d.turn = 1; d.brake = 1; d.accel = 3; d.low = 1; d.pos = 1; d.high = 0; d.belt = 0;
+        assertEquals("D  58KM/H  <L  BRK  ACC 30%  POS LOW  BELT!", d.toText());
+        DriveInfo p = new DriveInfo();
+        p.gear = 'P'; p.speedKmh = 0;
+        assertEquals("P  0KM/H", p.toText());
+        DriveInfo u = new DriveInfo();
+        assertEquals("-  --KM/H", u.toText());
+        u.turn = 3;
+        assertTrue(u.toText().contains("<HAZ>"));
+    }
+
+    @Test
+    public void icons_fromArgb_computesVideoColorAndKeepsTransparencyOut() {
+        int[] argb = new int[4 * 4];
+        java.util.Arrays.fill(argb, 0xFFFF0000);          // 불투명 빨강
+        argb[0] = 0x00000000;                              // 투명 한 점
+        DriveIcons.Sprite s = DriveIcons.fromArgb(argb, 4, 4);
+        assertEquals(0, s.a[0] & 0xFF);
+        assertEquals(255, s.a[1] & 0xFF);
+        assertEquals("빨강 휘도(BT.601 제한범위)", 82, s.y[1] & 0xFF, 2);
+        assertTrue("빨강은 V가 높고 U가 낮다", (s.v[3] & 0xFF) > 200 && (s.u[3] & 0xFF) < 100);
+        int[] clear = new int[16];
+        DriveIcons.Sprite c = DriveIcons.fromArgb(clear, 4, 4);
+        assertEquals("완전 투명 칸은 색이 중립", 128, c.u[0] & 0xFF);
+        assertEquals(0, c.ca[0] & 0xFF);
+    }
+
+    private static DriveIcons.Sprite solid(int argb, int px) {
+        int[] a = new int[px * px];
+        java.util.Arrays.fill(a, argb);
+        return DriveIcons.fromArgb(a, px, px);
+    }
+
+    @Test
+    public void osd_blit_blendsByAlpha_clipsAtTheEdges() {
+        byte[] f = gray(100);
+        DriveIcons.Sprite white = solid(0xFFFFFFFF, 8);
+        SentryOsd.blit(f, W, H, 10, 10, white);
+        assertEquals("불투명 흰 그림은 휘도가 235", 235, f[12 * W + 12] & 0xFF);
+        assertEquals("그림 밖은 그대로", 100, f[12 * W + 30] & 0xFF);
+        byte[] g = gray(100);
+        SentryOsd.blit(g, W, H, 10, 10, solid(0x80FFFFFF, 8));   // 절반 투명
+        int mid = g[12 * W + 12] & 0xFF;
+        assertTrue("절반 섞임: " + mid, mid > 150 && mid < 200);
+        byte[] h = gray(100);
+        SentryOsd.blit(h, W, H, W - 3, H - 3, white);            // 모서리 밖으로 나가도 예외 없이 잘림
+        SentryOsd.blit(h, W, H, -5, -5, white);
+        assertEquals(235, h[(H - 2) * W + (W - 2)] & 0xFF);
+    }
+
+    @Test
+    public void osd_iconBand_drawsOnlyKnownItemsAndLightsTheCurrentGear() {
+        java.util.Map<String, DriveIcons.Sprite> m = new java.util.HashMap<>();
+        for (String n : DriveIcons.NAMES) m.put(n, solid(n.endsWith("_enable") ? 0xFFFFFFFF : 0xFF404040, 24));
+        DriveIcons ic = new DriveIcons(m);
+        int barH = Math.round(H * 0.0375f) & ~1;
+        DriveInfo d = new DriveInfo();
+        d.gear = 'D'; d.speedKmh = 40; d.turn = 2;
+        byte[] a = gray(100);
+        new SentryOsd(false, false, "top_left", () -> -1, null, () -> d).drawIconBand(a, W, H, 0, barH, 2, d, ic);
+        int whiteA = count(a, 0, barH, 230);
+        assertTrue("켜진 D·오른쪽 깜빡이·속도 글씨가 흰색으로", whiteA > 300);
+        d.brake = 1; d.accel = 5; d.low = 1; d.high = 1; d.pos = 1; d.fogRear = 1; d.belt = 0;
+        byte[] b = gray(100);
+        new SentryOsd(false, false, "top_left", () -> -1, null, () -> d).drawIconBand(b, W, H, 0, barH, 2, d, ic);
+        assertTrue("읽힌 항목이 늘면 켜진 그림도 늘어난다", count(b, 0, barH, 230) > whiteA + 1000);
+    }
+
     private static byte[] gray(int v) {
         byte[] f = new byte[W * H * 3 / 2];
         java.util.Arrays.fill(f, 0, W * H, (byte) v);

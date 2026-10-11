@@ -73,6 +73,8 @@ public final class SentryOsd implements PreRollEncoder.FrameOverlay {
     private final Supplier<String> info;   // 주행 정보 한 줄(ASCII 대문자 토큰) — null이면 띠를 만들지 않는다(센트리). 0.5초마다만 다시 읽는다
     private long lastInfoMs = Long.MIN_VALUE;
     private String infoText = "";
+    private final Supplier<DriveInfo> driveInfo;   // 주행 정보(값) — 있으면 순정 블랙박스 아이콘 띠를 그리고, 아이콘을 못 읽으면 값을 글자로 대신한다
+    private DriveInfo curInfo;
     private final Calendar cal = Calendar.getInstance();
     private long lastSec = Long.MIN_VALUE;
     private String timeText = "";
@@ -82,16 +84,23 @@ public final class SentryOsd implements PreRollEncoder.FrameOverlay {
     }
 
     public SentryOsd(boolean showDatetime, boolean showBattery, String pos, IntSupplier battery, Supplier<String> info) {
+        this(showDatetime, showBattery, pos, battery, info, null);
+    }
+
+    public SentryOsd(boolean showDatetime, boolean showBattery, String pos, IntSupplier battery, Supplier<String> info, Supplier<DriveInfo> driveInfo) {
         this.showDatetime = showDatetime;
         this.showBattery = showBattery;
         this.pos = pos == null ? "top_left" : pos;
         this.battery = battery;
         this.info = info;
+        this.driveInfo = driveInfo;
     }
+
+    private boolean hasInfoBand() { return info != null || driveInfo != null; }
 
     @Override
     public void apply(byte[] nv12, int w, int h, long wallMs) {
-        if (!showDatetime && !showBattery && info == null) return;
+        if (!showDatetime && !showBattery && !hasInfoBand()) return;
         if (nv12 == null || w < 64 || h < 64 || nv12.length < w * h * 3 / 2) return;
         int barH = Math.max(16, Math.round(h * 0.0375f)) & ~1;
         int s = Math.max(1, (barH * 6 / 10) / 7);
@@ -125,22 +134,86 @@ public final class SentryOsd implements PreRollEncoder.FrameOverlay {
 
     // 둘째 띠 — 주행 정보. 위쪽 띠면 그 바로 아래, 아래쪽 띠면 그 바로 위. 정렬은 같은 규칙, 띠보다 길면 오른쪽을 자른다
     private void drawInfoBand(byte[] nv12, int w, int h, long wallMs, int barH, int s, int barY) {
-        if (info == null) return;
+        if (!hasInfoBand()) return;
         if (wallMs / 500L != lastInfoMs) {
             lastInfoMs = wallMs / 500L;
-            String t;
-            try { t = info.get(); } catch (RuntimeException e) { t = null; }
-            infoText = t == null ? "" : t;
+            String t = null;
+            DriveInfo di = null;
+            try { if (driveInfo != null) di = driveInfo.get(); } catch (RuntimeException e) { di = null; }
+            try { if (di == null && info != null) t = info.get(); } catch (RuntimeException e) { t = null; }
+            curInfo = di;
+            infoText = di != null ? di.toText() : (t == null ? "" : t);
         }
         if (infoText.isEmpty()) return;
         int y2 = pos.startsWith("bottom") ? barY - barH : barY + barH;
         if (y2 < 0 || y2 + barH > h) return;
         y2 &= ~1;
         dimBar(nv12, w, h, y2, barH);
+        DriveIcons icons = curInfo != null ? DriveIcons.forSize((barH - 4) & ~1) : null;   // 아직 읽는 중이거나 순정 앱이 없으면 null → 글자 띠
+        if (icons != null) { drawIconBand(nv12, w, h, y2, barH, s, curInfo, icons); return; }
         int ty = y2 + (barH - 7 * s) / 2;
         int maxChars = Math.max(1, (w - s * 8) / (6 * s));
         String t = infoText.length() > maxChars ? infoText.substring(0, maxChars) : infoText;
         drawText(nv12, w, h, alignX(w, t.length() * 6 * s, s), ty, s, t);
+    }
+
+    // ★순정 블랙박스와 같은 아이콘 줄(운영자 10-11): 기어 P R N D(지금 기어만 켜짐) · 속도 · 좌우 깜빡이 · 브레이크 · 가속(0~10) · 하향·상향·차폭·뒤안개 · 벨트.
+    //   읽힌 적 없는 항목(-1)은 그리지 않고, 읽힌 항목은 순정처럼 켜짐(색)/꺼짐(회색) 그림 한 쌍으로 보인다. 정렬은 같은 규칙.
+    void drawIconBand(byte[] f, int w, int h, int y0, int bandH, int s, DriveInfo di, DriveIcons ic) {
+        java.util.ArrayList<DriveIcons.Sprite> sp = new java.util.ArrayList<>();
+        String speed = (di.speedKmh < 0 ? "--" : String.valueOf(di.speedKmh)) + "KM/H";
+        for (char g : new char[]{'P', 'R', 'N', 'D'}) sp.add(ic.get(g + (di.gear == g ? "_enable" : "_disable")));
+        int afterGear = sp.size();
+        sp.add(ic.get("left_turn_signal" + ((di.turn & 1) != 0 ? "_enable" : "_disable")));
+        sp.add(ic.get("right_turn_signal" + ((di.turn & 2) != 0 ? "_enable" : "_disable")));
+        if (di.brake >= 0) sp.add(ic.get("brake" + (di.brake == 1 ? "_enable" : "_disable")));
+        if (di.accel >= 0) sp.add(ic.get("Accelerate_" + Math.min(10, di.accel)));
+        if (di.low >= 0) sp.add(ic.get("dipped_headlight" + (di.low == 1 ? "_enable" : "_disable")));
+        if (di.high >= 0) sp.add(ic.get("high_beam" + (di.high == 1 ? "_enable" : "_disable")));
+        if (di.pos >= 0) sp.add(ic.get("little_lamp" + (di.pos == 1 ? "_enable" : "_disable")));
+        if (di.fogRear >= 0) sp.add(ic.get("rear_fog_lamp" + (di.fogRear == 1 ? "_enable" : "_disable")));
+        if (di.belt >= 0) sp.add(ic.get("safety_belt" + (di.belt == 0 ? "_enable" : "_disable")));   // 순정: 값 1이면 꺼짐, 0이면 빨강
+        int gap = Math.max(2, s * 2), textW = speed.length() * 6 * s;
+        int total = textW + gap * 2;
+        for (DriveIcons.Sprite q : sp) if (q != null) total += q.w + gap;
+        int x = alignX(w, total, s);
+        for (int i = 0; i < sp.size(); i++) {
+            DriveIcons.Sprite q = sp.get(i);
+            if (q != null) { blit(f, w, h, x, y0 + (bandH - q.h) / 2, q); x += q.w + gap; }
+            if (i == afterGear - 1) { drawText(f, w, h, x + gap, y0 + (bandH - 7 * s) / 2, s, speed); x += textW + gap * 2; }   // 기어 뒤에 속도
+        }
+    }
+
+    // 그림 한 장을 NV12 위에 투명도대로 섞는다(짝수 좌표로 맞춤)
+    static void blit(byte[] f, int w, int h, int x0, int y0, DriveIcons.Sprite sp) {
+        x0 &= ~1;
+        y0 &= ~1;
+        for (int yy = 0; yy < sp.h; yy++) {
+            int y = y0 + yy;
+            if (y < 0 || y >= h) continue;
+            for (int xx = 0; xx < sp.w; xx++) {
+                int x = x0 + xx;
+                if (x < 0 || x >= w) continue;
+                int a = sp.a[yy * sp.w + xx] & 0xFF;
+                if (a == 0) continue;
+                int d = f[y * w + x] & 0xFF, src = sp.y[yy * sp.w + xx] & 0xFF;
+                f[y * w + x] = (byte) ((d * (255 - a) + src * a) / 255);
+            }
+        }
+        int uvBase = w * h, cw = sp.w / 2, chh = sp.h / 2;
+        for (int cy = 0; cy < chh; cy++) {
+            int row = y0 / 2 + cy;
+            if (row < 0 || row >= h / 2) continue;
+            for (int cx = 0; cx < cw; cx++) {
+                int ux = x0 + cx * 2;
+                if (ux < 0 || ux + 1 >= w) continue;
+                int a = sp.ca[cy * cw + cx] & 0xFF;
+                if (a == 0) continue;
+                int o = uvBase + row * w + ux;
+                f[o] = (byte) (((f[o] & 0xFF) * (255 - a) + (sp.u[cy * cw + cx] & 0xFF) * a) / 255);
+                f[o + 1] = (byte) (((f[o + 1] & 0xFF) * (255 - a) + (sp.v[cy * cw + cx] & 0xFF) * a) / 255);
+            }
+        }
     }
 
     // 좌·중·우 정렬 시작 x(띠 안). 덩어리가 띠보다 넓으면 왼쪽 여백부터
