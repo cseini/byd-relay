@@ -319,6 +319,7 @@ public final class SentryManager {
                 ignOffAtUptime = 0;
                 handler.removeCallbacks(armTask);
                 handler.removeCallbacks(restartTask);
+                if (!settings.enabled && state == State.IDLE) return;   // 꺼진 주행 녹화는 시동 변화에도 조용(로그·상태 변화·저장소 접근 없음)
                 if (on) {
                     log("시동 ON — " + (DRIVE_START_DELAY_MS / 1000) + "초 뒤 주행 녹화 게이트 평가");
                     if (settings.enabled) handler.postDelayed(armTask, DRIVE_START_DELAY_MS);
@@ -1526,7 +1527,10 @@ public final class SentryManager {
             try { host.putStatus(KEY_STALL, ""); } catch (Throwable ignored) {}
         }
         evaluate(false);
-        if (drive && !settings.enabled && state == State.IDLE) return;   // 꺼진 주행 녹화는 여기서 끝 — 디스크 스캔·고아 정리·업로드 없음
+        if (drive && !settings.enabled && state == State.IDLE) {   // 꺼진 주행 녹화는 여기서 끝 — 디스크 스캔·고아 정리 없음. 짧은 상태 한 줄만 다시 올린다(값이 같으면 업로드 변화 없음)
+            try { host.putStatus(KEY_STATUS, DRIVE_OFF_STATUS); } catch (Throwable ignored) {}   // 앱 시작 직후엔 릴레이가 아직 없어 init 때 올린 한 줄이 버려질 수 있다(10-11 운영자 차 877에서 relay_state.drive가 안 보였다)
+            return;
+        }
         if (migrateIoPending.compareAndSet(false, true)) ioPost(() -> { migrateIoPending.set(false); try { maybeMigrate(); } catch (Throwable t) { log("내장 영상 옮기기 실패 — " + t); } });   // 센트리가 IDLE(시동 ON·주행 중)이어도 돈다
         if (!settings.enabled && state == State.IDLE && state == publishedState && why.equals(publishedWhy)) return;   // ★꺼짐+IDLE이고 올린 상태가 현재와 같으면 디스크 스캔·업로드·고아 정리 생략(꺼진 차는 매분 저장소를 안 만진다)
         long now = SystemClock.elapsedRealtime();
