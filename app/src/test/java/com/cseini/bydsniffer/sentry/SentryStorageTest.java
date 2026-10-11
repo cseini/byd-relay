@@ -183,4 +183,28 @@ public class SentryStorageTest {
         assertTrue(d.setLastModified(1_000_000_000_000L));
         assertEquals(1_700_000_000_000L, SentryStorage.lastModifiedTree(d));
     }
+
+    @Test
+    public void estimateJson_followsTheFrameRateSetting() throws Exception {
+        org.json.JSONObject normal = new org.json.JSONObject(); normal.put("fps", "normal");
+        org.json.JSONObject reduced = new org.json.JSONObject(); reduced.put("fps", "reduced");
+        org.json.JSONObject low = new org.json.JSONObject(); low.put("fps", "low");
+        org.json.JSONObject n = SentryStorage.estimateJson(10000, SentrySettings.fromJson(normal));
+        org.json.JSONObject r = SentryStorage.estimateJson(10000, SentrySettings.fromJson(reduced));
+        org.json.JSONObject l = SentryStorage.estimateJson(10000, SentrySettings.fromJson(low));
+        // 기본 해상도는 원본(4000kbps@15fps) — 10fps면 2666kbps라 1.5배 오래, 5fps면 1333kbps라 3배 오래 저장된다
+        assertEquals(5.6, n.getDouble("original"), 0.0001);
+        assertEquals(8.3, r.getDouble("original"), 0.0001);
+        assertEquals(16.7, l.getDouble("original"), 0.0001);
+        assertEquals(14.8, n.getDouble("hd"), 0.0001);
+        assertTrue("프레임을 낮추면 모든 화질의 예상 시간이 늘어난다", r.getDouble("hd") > n.getDouble("hd") && r.getDouble("fhd") > n.getDouble("fhd") && l.getDouble("hd") >= r.getDouble("hd"));
+    }
+
+    @Test
+    public void estimateJson_usesManualBitrateForTheSelectedResolution() throws Exception {
+        org.json.JSONObject o = new org.json.JSONObject(); o.put("resolution", "hd"); o.put("bitrate_kbps", 3000);
+        org.json.JSONObject e = SentryStorage.estimateJson(10000, SentrySettings.fromJson(o));
+        assertEquals(7.4, e.getDouble("hd"), 0.0001);   // 선택한 화질(HD)은 수동 3000kbps 기준
+        assertEquals(7.4, e.getDouble("fhd"), 0.0001);   // 나머지는 자동값(FHD 3000)
+    }
 }

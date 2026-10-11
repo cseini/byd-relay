@@ -156,11 +156,7 @@ public final class SentryStorage {
             vols.put(removableJson("sd", rem.size() > 0 ? rem.get(0) : null, "sd".equals(settings.storage)));
             vols.put(removableJson("usb", rem.size() > 1 ? rem.get(1) : null, "usb".equals(settings.storage)));
             o.put("volumes", vols);
-            JSONObject est = new JSONObject();
-            est.put("hd", calcEstimateHours(limit, kbpsFor("hd")));
-            est.put("fhd", calcEstimateHours(limit, kbpsFor("fhd")));
-            est.put("original", calcEstimateHours(limit, kbpsFor("original")));
-            o.put("estimateHours", est);
+            o.put("estimateHours", estimateJson(limit, settings));
             return o;
         } catch (JSONException e) {
             throw new IllegalStateException("저장소 JSON 변환 실패: " + e.getMessage(), e);
@@ -639,9 +635,14 @@ public final class SentryStorage {
         return d != null && d.isDirectory() && d.canWrite();
     }
 
-    // 선택한 화질은 수동 비트레이트 포함 실효값, 나머지는 자동값
-    private int kbpsFor(String res) {
-        return res.equals(settings.resolution) ? settings.effectiveBitrateKbps() : SentrySettings.autoBitrateKbps(res, settings.fps);
+    // 예상 저장 시간 {"hd","fhd","original"} — 지금 설정(프레임·수동 비트레이트)으로 계산한다. 센트리가 감시 중일 때 설정을 바꾸면 이 저장소 객체는 옛 설정을 쥔 채 재시작을 기다리므로,
+    // 매니저가 항상 최신 설정으로 다시 계산해 덮어쓴다(운영자 10-11 "녹화 프레임을 바꿔도 예상 저장 시간이 안 바뀌어")
+    static JSONObject estimateJson(long limitMb, SentrySettings s) throws JSONException {
+        JSONObject est = new JSONObject();
+        est.put("hd", calcEstimateHours(limitMb, s.kbpsFor("hd")));
+        est.put("fhd", calcEstimateHours(limitMb, s.kbpsFor("fhd")));
+        est.put("original", calcEstimateHours(limitMb, s.kbpsFor("original")));
+        return est;
     }
 
     // 없는 폴더면 존재하는 가장 가까운 상위로 올라가 StatFs. 구할 수 없으면 null

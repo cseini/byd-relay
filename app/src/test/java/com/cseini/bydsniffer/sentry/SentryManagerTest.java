@@ -306,4 +306,25 @@ public class SentryManagerTest {
         // 움직임이 계속되는 중 이벤트가 바뀜(파일 길이로 끊김): 표시만 남기고 알림 안 함
         assertEquals(2, SentryManager.contEpisodeDecision(105_000L, 100_000L, 100_000L, true, q, cd));
     }
+
+    @Test
+    public void planDelete_dedupesKeepsOrderSkipsRecordingAndBadIdsAndCapsAt100() {
+        String a = "2026-10-10_07h50m11s", b = "2026-10-10_07h51m06s", rec = "2026-10-10_07h55m05s";
+        java.util.List<String[]> p = SentryManager.planDelete(Arrays.asList(a, b, a, "../etc", rec, ""), rec);
+        assertEquals(5, p.size());   // a 중복 제거
+        assertEquals("ok", p.get(0)[1]);
+        assertEquals(a, p.get(0)[0]);
+        assertEquals("ok", p.get(1)[1]);
+        assertEquals("id 형식", p.get(2)[1]);
+        assertEquals("녹화 중", p.get(3)[1]);
+        assertEquals("id 형식", p.get(4)[1]);
+        java.util.List<String> many = new java.util.ArrayList<>();
+        for (int i = 0; i < 130; i++) many.add(String.format("2026-10-10_%02dh%02dm%02ds", i / 60, i % 60, 5));
+        java.util.List<String[]> q = SentryManager.planDelete(many, null);
+        int ok = 0, over = 0;
+        for (String[] e : q) { if ("ok".equals(e[1])) ok++; else if (e[1].startsWith("한 번에")) over++; }
+        assertEquals(100, ok);
+        assertEquals(30, over);
+        assertTrue(SentryManager.planDelete(new java.util.ArrayList<String>(), null).isEmpty());
+    }
 }

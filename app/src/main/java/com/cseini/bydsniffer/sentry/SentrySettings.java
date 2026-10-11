@@ -246,6 +246,11 @@ public final class SentrySettings {
         }
     }
 
+    // 이 화질(hd·fhd·original)로 녹화할 때의 비트레이트 — 선택한 화질은 수동 비트레이트까지 반영한 실효값, 나머지는 현재 프레임 설정의 자동값(예상 저장 시간용)
+    public int kbpsFor(String res) {
+        return res.equals(resolution) ? effectiveBitrateKbps() : autoBitrateKbps(res, fps);
+    }
+
     public int effectiveBitrateKbps() {
         return bitrateKbps > 0 ? bitrateKbps : autoBitrateKbps(resolution, fps);
     }

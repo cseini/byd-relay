@@ -250,6 +250,20 @@ public final class SentryHttp {
 
         SentryIndex ix = m.index();
         if (ix == null) return text(Response.Status.SERVICE_UNAVAILABLE, "센트리 준비 안 됨");
+        if ("/sentry/fav".equals(uri) && o.has("ids")) {   // 여러 영상 즐겨찾기 — {"ids":[…],"favorite":true|false}(최대 100개). 응답은 SentryManager.favoriteEvents 형식
+            org.json.JSONArray arr = o.optJSONArray("ids");
+            if (arr == null || arr.length() == 0) return text(Response.Status.BAD_REQUEST, "ids");
+            List<String> list = new java.util.ArrayList<>();
+            for (int i = 0; i < arr.length(); i++) list.add(arr.optString(i, ""));
+            return json(m.favoriteEvents(list, o.optBoolean("favorite", false)).toString());
+        }
+        if ("/sentry/delete".equals(uri) && o.has("ids")) {   // 여러 영상 삭제 — {"ids":["…","…"]}(최대 100개). 응답은 SentryManager.deleteEvents 형식
+            org.json.JSONArray arr = o.optJSONArray("ids");
+            if (arr == null || arr.length() == 0) return text(Response.Status.BAD_REQUEST, "ids");
+            List<String> list = new java.util.ArrayList<>();
+            for (int i = 0; i < arr.length(); i++) list.add(arr.optString(i, ""));
+            return json(m.deleteEvents(list).toString());
+        }
         String id = o.optString("id", "");
         if (!SentryIndex.isValidId(id)) return text(Response.Status.BAD_REQUEST, "id");
 

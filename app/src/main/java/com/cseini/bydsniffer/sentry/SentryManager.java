@@ -558,7 +558,9 @@ public final class SentryManager {
                 o.put("fallback", st.fallback());
                 String fw = st.fallbackWhy();
                 if (fw != null) o.put("fallbackWhy", fw);   // 폴백 이유(unmounted|no_write)
-                o.put("storage", st.volumesJson());
+                JSONObject stj = st.volumesJson();
+                stj.put("estimateHours", SentryStorage.estimateJson(st.limitMb(), settings));   // 저장소 객체는 옛 설정을 쥘 수 있어 최신 설정으로 다시 계산
+                o.put("storage", stj);
                 o.put("storageKind", st.selectedKind());
             }
             o.put("usedMb", usedMbCache);
@@ -666,6 +668,79 @@ public final class SentryManager {
 
     // ★녹화 전체 삭제(LAN POST /sentry/clear·워커 SENTRY_CLEAR) — 운영자 요청. 센트리 자기 폴더(모든 저장소 루트 아래 이벤트·썸네일·색인)만 지운다. confirm이 "all"이 아니면 거부.
     //   진행 중 이벤트는 마감한 뒤 지운다(세션을 멈추고 지우기를 새 스레드로 넘긴 뒤 끝나면 게이트를 다시 평가해 재무장). 응답의 deleted·freedMb는 지우기 시작 시점의 이벤트 수·용량이다(지우기는 뒤에서 이어짐)
+    // 여러 영상 삭제(운영자 10-11 "원격지에서도 영상별 삭제 또는 목록에서 여러 개 선택 후 삭제, 직결도") — 폰 원격 명령(SENTRY_DELETE)·직결 HTTP(/sentry/delete {"ids":[…]}) 공용.
+    // 한 번에 최대 MAX_DELETE_IDS개. 녹화 중인 이벤트는 건너뛰고 사유를 돌려준다. 이미 없는 영상은 지운 것으로 본다(앱이 다시 보내도 같은 결과).
+    // 반환 {"ok":전부 지움 또는 이미 없음,"deleted":[id…],"gone":[이미 없던 id…],"failed":[{"id","error"}…],"count":실제로 지운 수}
+    static final int MAX_DELETE_IDS = 100;
+
+    public JSONObject deleteEvents(List<String> ids) {
+        SentryIndex ix = index;
+        if (ix == null) return errorJson("센트리 초기화 전");
+        if (clearing.get()) return errorJson("전체 삭제 중");
+        JSONArray deleted = new JSONArray(), gone = new JSONArray(), failed = new JSONArray();
+        java.util.List<String[]> plan = planDelete(ids, recordingEventId());
+        for (String[] p : plan) {
+            String id = p[0];
+            if (!"ok".equals(p[1])) { failed.put(failure(id, p[1])); continue; }
+            try {
+                File dir = ix.eventDir(id);
+                if (dir == null || !dir.isDirectory()) { gone.put(id); continue; }
+                if (ix.delete(id)) deleted.put(id); else failed.put(failure(id, "삭제 실패"));
+            } catch (Throwable t) {
+                failed.put(failure(id, "오류 " + t.getClass().getSimpleName()));
+            }
+        }
+        log("이벤트 삭제 " + deleted.length() + "개" + (gone.length() > 0 ? "(이미 없음 " + gone.length() + ")" : "") + (failed.length() > 0 ? ", 실패 " + failed.length() : "") + " (요청 " + plan.size() + "개)");
+        if (deleted.length() > 0) ioPost(() -> { refreshStats(); publishStatusNow(); });
+        try {
+            return new JSONObject().put("ok", failed.length() == 0).put("deleted", deleted).put("gone", gone).put("failed", failed).put("count", deleted.length());
+        } catch (JSONException e) {
+            return errorJson("응답 구성 실패");
+        }
+    }
+
+    // 여러 영상 즐겨찾기 설정·해제(운영자 10-11 "원격 즐겨찾기도 있어야지") — 원격 명령 SENTRY_FAV·직결 /sentry/fav {"ids":[…],"favorite":true|false} 공용. 최대 100개.
+    // 녹화 중인 이벤트도 가능(메타를 다시 쓸 때 기존 즐겨찾기 값을 이어받는다). 반환 {"ok":전부 바꿈,"updated":[id…],"failed":[{"id","error":"없음|id 형식|한 번에 100개까지|오류 …"}],"count","favorite"}
+    public JSONObject favoriteEvents(List<String> ids, boolean favorite) {
+        SentryIndex ix = index;
+        if (ix == null) return errorJson("센트리 초기화 전");
+        JSONArray updated = new JSONArray(), failed = new JSONArray();
+        for (String[] p : planDelete(ids, null)) {
+            if (!"ok".equals(p[1])) { failed.put(failure(p[0], p[1])); continue; }
+            try {
+                if (ix.setFavorite(p[0], favorite)) updated.put(p[0]); else failed.put(failure(p[0], "없음"));
+            } catch (Throwable t) {
+                failed.put(failure(p[0], "오류 " + t.getClass().getSimpleName()));
+            }
+        }
+        log("즐겨찾기 " + (favorite ? "설정 " : "해제 ") + updated.length() + "개" + (failed.length() > 0 ? ", 실패 " + failed.length() : ""));
+        if (updated.length() > 0) publishStatus();
+        try {
+            return new JSONObject().put("ok", failed.length() == 0).put("updated", updated).put("failed", failed).put("count", updated.length()).put("favorite", favorite);
+        } catch (JSONException e) {
+            return errorJson("응답 구성 실패");
+        }
+    }
+
+    // 순수 계산: 요청 id 목록(중복 제거·입력 순서 유지)을 {id, 상태}로 나눈다. 상태 "ok"=지울 수 있음, 그 밖은 건너뛴 이유("id 형식"·"녹화 중"·"한 번에 100개까지"). JVM에서 시험한다.
+    static java.util.List<String[]> planDelete(List<String> ids, String recordingId) {
+        java.util.List<String[]> out = new ArrayList<>();
+        int asked = 0;
+        for (String id : new java.util.LinkedHashSet<>(ids)) {
+            String st;
+            if (++asked > MAX_DELETE_IDS) st = "한 번에 " + MAX_DELETE_IDS + "개까지";
+            else if (!SentryIndex.isValidId(id)) st = "id 형식";
+            else if (id.equals(recordingId)) st = "녹화 중";
+            else st = "ok";
+            out.add(new String[]{id == null ? "" : id, st});
+        }
+        return out;
+    }
+
+    private static JSONObject failure(String id, String why) {
+        try { return new JSONObject().put("id", id).put("error", why); } catch (JSONException e) { return new JSONObject(); }
+    }
+
     public JSONObject clearAll(String confirm) {
         SentryHost hs = host;
         SentryIndex ix = index;

@@ -401,11 +401,11 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    // ★872 링크락 런처 사용 — 운영자판 먼저(공유판은 숨김)
+    // ★872 링크락 런처 사용 — 돌핀(디링크3)만
     private void updateLauncherButton() {
         android.widget.Button b = findViewById(R.id.launcherButton);
         if (b == null) return;
-        boolean show = BuildConfig.IS_OPERATOR;
+        boolean show = BuildConfig.IS_OPERATOR && !DiLink5Support.isDiLink5();   // ★872 운영자 10-11 "런처 버튼은 아직 공유판에 오픈하지 마" — 운영자판 돌핀만
         b.setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
         findViewById(R.id.launcherDesc).setVisibility(show ? android.view.View.VISIBLE : android.view.View.GONE);
         SnifferService svc = SnifferService.getInstance();

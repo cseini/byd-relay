@@ -2150,11 +2150,33 @@ public class SnifferService extends Service {
         if ("CLOUDFLASH".equals(action)) return cloudFlash();   // ★릴레이가 클라우드로 비상등. 2026-09-03 공유판도 허용.
         if ("CAMSHOT".equals(action)) return camShot(params);
         if ("CAMDUALPROBE".equals(action)) return camOffOn() ? CAM_OFF_MSG : clusterDualProbe();   // ★클러스터 2단계 진단(2026-09-17) — 전방 감지 중 AVM view5 동시 open 가능 여부 실차 판정
-        if ("SENTRY_SET".equals(action) || "SENTRY_STATUS".equals(action) || "SENTRY_LIST".equals(action) || "SENTRY_CALENDAR".equals(action) || "SENTRY_CLEAR".equals(action) || "SENTRY_THUMB".equals(action) || "SENTRY_CUT".equals(action) || "SENTRY_MARKS".equals(action)) {   // ★센트리(docs/SENTRY-DESIGN.md 훅 v2) — relay-loop 인라인이라 SET은 새 스레드로 넘기고 즉시 반환, STATUS는 파일시스템을 안 만지는 캐시만
+        if ("SENTRY_SET".equals(action) || "SENTRY_STATUS".equals(action) || "SENTRY_LIST".equals(action) || "SENTRY_CALENDAR".equals(action) || "SENTRY_CLEAR".equals(action) || "SENTRY_DELETE".equals(action) || "SENTRY_FAV".equals(action) || "SENTRY_THUMB".equals(action) || "SENTRY_CUT".equals(action) || "SENTRY_MARKS".equals(action)) {   // ★센트리(docs/SENTRY-DESIGN.md 훅 v2) — relay-loop 인라인이라 SET은 새 스레드로 넘기고 즉시 반환, STATUS는 파일시스템을 안 만지는 캐시만
             if (DiLink5Support.isDiLink5() && !BuildConfig.D5_SENTRY) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";   // ★공유판은 매니저 미초기화라 ok:true로 오인되지 않게 거부(씨라7 시험판 D5_SENTRY만 예외)
             if ("SENTRY_STATUS".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().cachedStatusJson().toString()); return null; }   // ★null=ok:true, 상태는 data로(DATAUSE 방식)
             if ("SENTRY_LIST".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteList(params != null ? params.optString("date") : null).toString()); return null; }   // ★집에서 보는 목록 — 하루치 7000자 이내(워커 8000자 절단)
             if ("SENTRY_CUT".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().cutNow().toString()); return null; }   // ★지금 보기 — 현재 조각을 바로 닫음(최대 약 3초 대기)
+            if ("SENTRY_FAV".equals(action)) {   // ★여러 영상 즐겨찾기(운영자 10-11) — params {"ids":[…]}(최대 100개) 또는 {"id":"…"}, "favorite":true|false(기본 true). 응답 {"ok","updated":[…],"failed":[{"id","error"}],"count","favorite"}
+                java.util.List<String> favs = new java.util.ArrayList<>();
+                if (params != null) {
+                    org.json.JSONArray arr = params.optJSONArray("ids");
+                    if (arr != null) for (int i = 0; i < arr.length(); i++) favs.add(arr.optString(i, ""));
+                    String one = params.optString("id", "");
+                    if (!one.isEmpty()) favs.add(one);
+                }
+                if (favs.isEmpty()) return "즐겨찾기할 id가 없음";
+                RelayClient.RESULT_DATA.set(SentryManager.get().favoriteEvents(favs, params == null || params.optBoolean("favorite", true)).toString()); return null;
+            }
+            if ("SENTRY_DELETE".equals(action)) {   // ★여러 영상 삭제(운영자 10-11) — params {"ids":[…]}(최대 100개) 또는 {"id":"…"}. 응답 {"ok","deleted":[…],"gone":[…],"failed":[{"id","error"}],"count"}
+                java.util.List<String> dels = new java.util.ArrayList<>();
+                if (params != null) {
+                    org.json.JSONArray arr = params.optJSONArray("ids");
+                    if (arr != null) for (int i = 0; i < arr.length(); i++) dels.add(arr.optString(i, ""));
+                    String one = params.optString("id", "");
+                    if (!one.isEmpty()) dels.add(one);
+                }
+                if (dels.isEmpty()) return "삭제할 id가 없음";
+                RelayClient.RESULT_DATA.set(SentryManager.get().deleteEvents(dels).toString()); return null;
+            }
             if ("SENTRY_CLEAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().clearAll(params != null ? params.optString("confirm") : null).toString()); return null; }   // ★녹화 전체 삭제 — confirm:"all" 필수, 지우기는 뒤에서 이어짐
             if ("SENTRY_CALENDAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteCalendar(params != null ? params.optString("month") : null).toString()); return null; }   // ★집에서 보는 달력 — 한 달치 날짜별 이벤트 수
             if ("SENTRY_MARKS".equals(action)) {   // ★집에서 보는 시간축 표시·객체 판정(운영자판 10-09) — marks·objects·알림 사진(7200자 이내)
@@ -5318,7 +5340,7 @@ public class SnifferService extends Service {
     private com.cseini.motiondetect.KickDetector kickKd;
     private final java.util.concurrent.atomic.AtomicBoolean kickBusy = new java.util.concurrent.atomic.AtomicBoolean(false);
     private volatile long kickPersonUntil = 0, kickPersonNext = 0, kickLastFire = 0;
-    private boolean personGateOn() { return prefs == null || prefs.getBoolean("det_person_gate", true); }
+    private boolean personGateOn() { return prefs != null && prefs.getBoolean("det_person_gate", BuildConfig.IS_OPERATOR); }   // ★872 공유판은 운영자 차 시험 뒤에 켠다(기본 꺼짐)
     /** 사각형 안에서 가장 큰 사람 {점수, 높이 비율(사각형 대비), 추론ms}. 사람이 없으면 점수 0. 인식기 실패 null */
     private float[] detClosePerson(byte[] f, int w, int h, int[] box) {
         synchronized (detYoloLock) {

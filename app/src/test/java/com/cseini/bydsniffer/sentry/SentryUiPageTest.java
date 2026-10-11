@@ -79,4 +79,29 @@ public class SentryUiPageTest {
         assertEquals("2026-09-30", SentryUiPage.shiftDate("2026-10-01", -1));
         assertEquals("2026-01-01", SentryUiPage.shiftDate("2025-12-31", 1));
     }
+
+    @Test
+    public void multiSelectDelete_controlsAndScriptArePresent() {
+        String h = SentryUiPage.build("2026-10-10", Arrays.asList(ev("2026-10-10_07h50m11s", 1_791_499_811_000L, 55.7, false)), "&sgx=a&sg=b", null, false, "2026-10-10");
+        assertTrue(h.contains("id='bsel'") && h.contains("class='selbar'") && h.contains("id='bdel'") && h.contains("id='ball'") && h.contains("id='bcancel'"));
+        assertTrue("카드에 id와 체크 표시", h.contains("data-id='2026-10-10_07h50m11s'") && h.contains("<i class='ck'></i>"));
+        assertTrue("삭제는 /sentry/delete에 ids를 보낸다", h.contains("/sentry/delete") && h.contains("JSON.stringify({ids:ids})"));
+        assertTrue("100개씩 나눠 보낸다", h.contains("i+=100"));
+        assertTrue("공유판 권한 값을 요청에 붙인다", h.contains("var G='&sgx=a&sg=b'"));
+        assertTrue("지우기 전에 확인한다", h.contains("confirm(ids.length+'개 녹화를 삭제할까요?"));
+        // 권한 값에 따옴표가 있어도 스크립트가 깨지지 않는다
+        String q = SentryUiPage.build("2026-10-10", Collections.<SentryIndex.EventMeta>emptyList(), "&sg=a'b", null, false, "2026-10-10");
+        assertTrue(q.contains("var G='&sg=a\\'b'"));
+    }
+
+    @Test
+    public void favoriteButtonsAndScriptArePresent() {
+        String h = SentryUiPage.build("2026-10-10", Arrays.asList(ev("2026-10-10_07h50m11s", 1_791_499_811_000L, 55.7, true)), "&sgx=a&sg=b", null, false, "2026-10-10");
+        assertTrue(h.contains("id='bfav'") && h.contains("id='bunfav'"));
+        assertTrue("카드에 즐겨찾기 값", h.contains("data-fav='1'"));
+        assertTrue(h.contains("/sentry/fav") && h.contains("JSON.stringify({ids:ids,favorite:v})"));
+        assertTrue("전체 탭에서는 해제해도 카드를 지우지 않는다", h.contains("FAVTAB=false"));
+        String fav = SentryUiPage.build("2026-10-10", Arrays.asList(ev("2026-10-10_07h50m11s", 1_791_499_811_000L, 55.7, true)), "", null, true, "2026-10-10");
+        assertTrue("즐겨찾기 탭에서는 해제하면 카드를 뺀다", fav.contains("FAVTAB=true"));
+    }
 }
