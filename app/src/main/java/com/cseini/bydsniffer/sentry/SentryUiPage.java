@@ -39,7 +39,47 @@ final class SentryUiPage {
             + ".c .cap{padding:12px 14px;font-size:18px;line-height:1.4}.c .cap b{font-size:22px}.c .mu{color:var(--mu)}"
             + ".chip{display:inline-block;margin-right:6px;padding:2px 10px;border-radius:999px;background:#1B222A;color:var(--acc);font-size:15px}"
             + ".chip.l{color:var(--mu)}.fav{color:#FFC857}"
-            + ".empty{color:var(--mu);padding:60px 0;text-align:center;width:100%}";
+            + ".empty{color:var(--mu);padding:60px 0;text-align:center;width:100%}"
+            + ".btn{padding:12px 24px;border-radius:12px;background:var(--card);color:var(--tx);min-height:56px;display:flex;align-items:center;cursor:pointer;user-select:none}"
+            + ".c{position:relative}.ck{display:none;position:absolute;top:12px;left:12px;width:36px;height:36px;border-radius:50%;border:3px solid #fff;background:rgba(0,0,0,.45);z-index:2}"
+            + "body.sel .ck{display:block}.c.chk .ck{background:var(--acc);border-color:var(--acc)}.c.chk .ck:after{content:'✓';display:block;text-align:center;line-height:30px;color:#0C0E11;font-weight:700;font-size:24px}"
+            + "body.sel .c.chk{outline:4px solid var(--acc)}"
+            + ".selbar{display:none;position:fixed;left:0;right:0;bottom:0;padding:14px 24px;background:#10151b;border-top:1px solid var(--line);align-items:center;gap:14px;z-index:9}"
+            + "body.sel .selbar{display:flex}.selbar .n{margin-right:auto;font-size:22px}.selbar .del{background:#E5534B;color:#fff;font-weight:700}.selbar .del.off{opacity:.4;pointer-events:none}"
+            + "body.sel{padding-bottom:96px}";
+
+    // 여러 개 삭제용 스크립트(운영자 10-11 "목록에서 여러 개 선택 후 삭제") — 선택 모드에서 카드를 누르면 체크, 삭제는 /sentry/delete {"ids":[…]}를 100개씩 나눠 보낸다. G=공유판 권한 값
+    private static String script(String g, boolean favTab) {
+        return "var G=" + jsStr(g) + ",FAVTAB=" + favTab + ",sel={},on=false;function $(i){return document.getElementById(i)}\n"
+                + "function cards(){return document.querySelectorAll('.c')}\n"
+                + "function upd(){var n=Object.keys(sel).length;$('sn').textContent=n+'개 선택';var b=$('bdel');b.className='btn del'+(n?'':' off');}\n"
+                + "function mode(v){on=v;document.body.className=v?'sel':'';sel={};var cs=cards();for(var i=0;i<cs.length;i++)cs[i].classList.remove('chk');$('bsel').textContent=v?'선택 끝':'선택';upd();}\n"
+                + "(function(){var cs=cards();for(var i=0;i<cs.length;i++)(function(a){a.addEventListener('click',function(e){if(!on)return;e.preventDefault();var id=a.getAttribute('data-id');if(sel[id]){delete sel[id];a.classList.remove('chk')}else{sel[id]=1;a.classList.add('chk')}upd();})})(cs[i]);})();\n"
+                + "$('bsel').onclick=function(){mode(!on)};$('bcancel').onclick=function(){mode(false)};\n"
+                + "$('ball').onclick=function(){var cs=cards();for(var i=0;i<cs.length;i++){sel[cs[i].getAttribute('data-id')]=1;cs[i].classList.add('chk')}upd();};\n"
+                + "function post(ids){return fetch('/sentry/delete'+(G?'?'+G.substring(1):''),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids})}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});}\n"
+                + "function favPost(ids,v){return fetch('/sentry/fav'+(G?'?'+G.substring(1):''),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,favorite:v})}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});}\n"
+                + "function setFav(v){var ids=Object.keys(sel);if(!ids.length)return;var bad=[];\n"
+                + " (function next(k){if(k>=ids.length){done();return;}var part=ids.slice(k,k+100);favPost(part,v).then(function(j){var up=j.updated||[];\n"
+                + "   for(var x=0;x<up.length;x++){var el=document.querySelector('.c[data-id=\"'+up[x]+'\"]');if(!el)continue;el.setAttribute('data-fav',v?'1':'0');var cap=el.querySelector('.cap');var st=cap&&cap.querySelector('.fav');\n"
+                + "    if(v&&cap&&!st){var s=document.createElement('span');s.className='fav';s.textContent='★';cap.insertBefore(document.createTextNode(' '),cap.firstChild);cap.insertBefore(s,cap.firstChild);}else if(!v&&st){st.parentNode.removeChild(st);}\n"
+                + "    if(!v&&FAVTAB&&el.parentNode)el.parentNode.removeChild(el);}\n"
+                + "   for(var y=0;y<(j.failed||[]).length;y++)bad.push(j.failed[y].id+' '+j.failed[y].error);next(k+100);}).catch(function(e){bad.push('요청 실패 '+e.message);done();});})(0);\n"
+                + " function done(){mode(false);if(bad.length)alert('일부를 바꾸지 못했어요 ('+bad.length+'개)\\n'+bad.slice(0,5).join('\\n'));else if(!cards().length)location.reload();}\n"
+                + "}\n"
+                + "$('bfav').onclick=function(){setFav(true)};$('bunfav').onclick=function(){setFav(false)};\n"
+                + "$('bdel').onclick=function(){var ids=Object.keys(sel);if(!ids.length)return;if(!confirm(ids.length+'개 녹화를 삭제할까요? 되돌릴 수 없습니다.'))return;\n"
+                + " var chunks=[];for(var i=0;i<ids.length;i+=100)chunks.push(ids.slice(i,i+100));var bad=[],okn=0;\n"
+                + " (function next(k){if(k>=chunks.length){fin();return;}post(chunks[k]).then(function(j){var gone=(j.deleted||[]).concat(j.gone||[]);okn+=(j.deleted||[]).length;\n"
+                + "   for(var x=0;x<gone.length;x++){var el=document.querySelector('.c[data-id=\"'+gone[x]+'\"]');if(el&&el.parentNode)el.parentNode.removeChild(el);}\n"
+                + "   for(var y=0;y<(j.failed||[]).length;y++)bad.push(j.failed[y].id+' '+j.failed[y].error);next(k+1);}).catch(function(e){bad.push('요청 실패 '+e.message);fin();});})(0);\n"
+                + " function fin(){mode(false);if(bad.length)alert('일부를 지우지 못했어요 ('+bad.length+'개)\\n'+bad.slice(0,5).join('\\n'));else if(!cards().length)location.reload();}\n"
+                + "};";
+    }
+
+    private static String jsStr(String s) {
+        return "'" + (s == null ? "" : s.replace("\\", "\\\\").replace("'", "\\'")) + "'";
+    }
 
     // date=yyyy-MM-dd, g=공유판 권한 값("&sgx=…&sg=…", 없으면 ""), days=그 달 날짜별 이벤트 수. favOnly면 events는 날짜가 섞인 즐겨찾기 목록
     static String build(String date, List<SentryIndex.EventMeta> events, String g, Map<Integer, Integer> days, boolean favOnly, String today) {
@@ -47,7 +87,8 @@ final class SentryUiPage {
         StringBuilder sb = new StringBuilder("<!doctype html><html lang='ko'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>센트리</title><style>")
                 .append(CSS).append("</style></head><body><div class='top'><div class='brand'>센트리</div><div class='tabs'>")
                 .append("<a class='").append(favOnly ? "" : "on").append("' href='").append(BASE).append("?date=").append(date).append(gq).append("'>전체</a>")
-                .append("<a class='").append(favOnly ? "on" : "").append("' href='").append(BASE).append("?fav=1&date=").append(date).append(gq).append("'>즐겨찾기</a></div>");
+                .append("<a class='").append(favOnly ? "on" : "").append("' href='").append(BASE).append("?fav=1&date=").append(date).append(gq).append("'>즐겨찾기</a></div>")
+                .append("<a id='bsel' class='btn'>선택</a>");
         if (!favOnly) {
             sb.append("<div class='dn'><a href='").append(BASE).append("?date=").append(shiftDate(date, -1)).append(gq).append("'>◀</a><span>").append(date)
                     .append("</span><a href='").append(BASE).append("?date=").append(shiftDate(date, 1)).append(gq).append("'>▶</a></div>");
@@ -60,13 +101,15 @@ final class SentryUiPage {
             SimpleDateFormat hm = new SimpleDateFormat(favOnly ? "M/d HH:mm" : "HH:mm", Locale.KOREA);
             sb.append("<div class='grid'>");
             for (SentryIndex.EventMeta e : events) {
-                sb.append("<a class='c' href='/sentry/play?id=").append(e.id).append("&ui=1").append(gq).append("'><img loading='lazy' src='/sentry/thumb?id=").append(e.id).append(gq)
+                sb.append("<a class='c' data-id='").append(e.id).append("' data-fav='").append(e.favorite ? 1 : 0).append("' href='/sentry/play?id=").append(e.id).append("&ui=1").append(gq).append("'><i class='ck'></i><img loading='lazy' src='/sentry/thumb?id=").append(e.id).append(gq)
                         .append("'><div class='cap'>").append(e.favorite ? "<span class='fav'>★</span> " : "").append("<b>").append(hm.format(new Date(e.startMs))).append("</b> <span class='mu'>· ")
                         .append(dur(e.durationS)).append("</span><br>").append(chips(e)).append("</div></a>");
             }
             sb.append("</div>");
         }
-        return sb.append("</div><div style='padding:0 24px 28px'>").append(SentrySource.NOTE).append("</div></body></html>").toString();   // 소스 주소 안내는 .main(가로 배치) 밖에 둔다
+        sb.append("</div><div style='padding:0 24px 28px'>").append(SentrySource.NOTE).append("</div>");   // 소스 주소 안내는 .main(가로 배치) 밖에 둔다
+        sb.append("<div class='selbar'><span class='n' id='sn'>0개 선택</span><a id='ball' class='btn'>모두 선택</a><a id='bfav' class='btn'>즐겨찾기 추가</a><a id='bunfav' class='btn'>즐겨찾기 해제</a><a id='bdel' class='btn del off'>삭제</a><a id='bcancel' class='btn'>취소</a></div>");
+        return sb.append("<script>").append(script(gq, favOnly)).append("</script></body></html>").toString();
     }
 
     // 재생 화면(/sentry/play?…&ui=1)을 런처용으로 — 맨 위에 "← 목록" 링크와 넓은 화면용 스타일을 덧붙인다(재생 화면 코드는 건드리지 않는다)
