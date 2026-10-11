@@ -36,6 +36,7 @@ final class RemoteWebServer extends NanoHTTPD {
         Frame clusterFrame(long afterSeq, long waitMs);   // afterSeq보다 새 측면 JPEG(없으면 waitMs 대기 후 null)
         String clusterCfgJson();                     // ★619 {layout, ccam, camActive} — 클러스터 레이아웃·카메라 조정 설정(릴레이 저장)
         byte[] clusterTile(int side);                // ★619 카메라 화면 조정 배경 — 해당 쪽 타일 JPEG(카메라 예열 중일 때만, 아니면 null)
+        byte[] clusterView(int side, int w, int h, org.json.JSONObject cfg, long afterTs, long[] tsOut);   // ★882 런처 방향별 실시간 — afterTs보다 새 장 JPEG(없으면 null)
         void log(String msg);                        // D1 CLUSTER 로그(지연 실측)
         void noteLan();                              // ★560 폰이 LAN 직결로 붙음 — 워커 폴링을 늦춰 데이터 절약
         String pairInfoJson();                       // ★565 QR 표시 중일 때만 {devId,k} — 아니면 {ok:false}
@@ -196,6 +197,7 @@ final class RemoteWebServer extends NanoHTTPD {
                 if ("/cluster/state".equals(uri)) return clusterState();
                 if ("/cluster/cam.mjpg".equals(uri)) return camMjpeg("1".equals(session.getParms().get("keep")));   // ★729 keep=1 = 폰이 미리 열어 두는 연결
                 if ("/cluster/cfg".equals(uri)) { Response r = json(host.clusterCfgJson()); r.addHeader("Cache-Control", "no-store"); return r; }   // ★619
+                if ("/cluster/view.mjpg".equals(uri)) return viewMjpeg(session.getParms());   // ★882 링크락 런처 카메라 띠(방향별 실시간)
                 if ("/cluster/tile.jpg".equals(uri)) {   // ★619 ?side=2|4|8 · ★871 1=전방(링크락 런처 카메라 띠, 운영자 10-11)
                     int sd = 0; try { sd = Integer.parseInt(session.getParms().get("side")); } catch (Throwable ignored) {}
                     byte[] jpg = (sd == 1 || sd == 2 || sd == 4 || sd == 8) ? host.clusterTile(sd) : null;
@@ -355,6 +357,71 @@ final class RemoteWebServer extends NanoHTTPD {
     //   카메라가 안 켜진 동안은 대기(빈 파트 없음). 30초간 프레임이 없으면 스트림 종료(응답 스레드 누수 방지) → 페이지가 깜빡이 활성이면 1초 후 재요청.
     //   ★729 keep=1(폰이 신호 전에 미리 연 연결) — 안 닫고 3초마다 빈 파트(X-Keepalive)를 보내 연결을 살려 둔다(끊긴 폰은 쓰기 실패로 정리).
     //   프레임마다 X-Side(2좌·4우·8후진)·X-Seq를 붙여 폰이 다른 방향·지난 프레임을 거른다.
+    // ★882 GET /cluster/view.mjpg?side=1|2|4|8&fps=20&w=&h=[&dw=1&fov=&k=&pan=&proj=&tilt=&rot=&mir=] — 주행 녹화·센트리·보조 카메라가 받는 화면을 나눠 쓴다.
+    //   그 화면이 없으면(카메라를 쓰는 기능이 다 꺼져 있으면) 404 → 런처는 tile.jpg로 대신하고 1분 뒤 다시. 도중에 5초 끊기면 연결을 닫는다.
+    private Response viewMjpeg(java.util.Map<String, String> q) {
+        int sd; try { sd = Integer.parseInt(q.get("side")); } catch (Throwable t) { sd = 0; }
+        if (sd != 1 && sd != 2 && sd != 4 && sd != 8) return text(Response.Status.BAD_REQUEST, "side=1|2|4|8");
+        int fps = clampInt(q.get("fps"), 20, 1, 30), w = clampInt(q.get("w"), 540, 64, 1920), h = clampInt(q.get("h"), 250, 64, 1080);
+        org.json.JSONObject cfg = null;
+        if ("1".equals(q.get("dw"))) {
+            try {
+                boolean wide = sd == 1 || sd == 8;   // 전·후방은 가로로 넓게 편 룸미러형(가로 직선)
+                cfg = new org.json.JSONObject().put("x", 0).put("y", 0).put("w", 1).put("h", 1).put("dw", true)
+                        .put("fov", clampInt(q.get("fov"), 160, 60, 200)).put("k", clampDbl(q.get("k"), 0, -1, 1))
+                        .put("pan", "1".equals(q.getOrDefault("pan", wide ? "1" : "0"))).put("proj", clampInt(q.get("proj"), wide ? 2 : 0, 0, 2))
+                        .put("tilt", clampDbl(q.get("tilt"), 0, -90, 90)).put("rot", clampDbl(q.get("rot"), 0, -180, 180)).put("mir", "1".equals(q.get("mir")));
+            } catch (org.json.JSONException e) { return text(Response.Status.BAD_REQUEST, "설정 오류"); }
+        }
+        long[] ts = new long[1];
+        byte[] first = null;
+        for (int i = 0; i < 30 && first == null; i++) {
+            first = host.clusterView(sd, w, h, cfg, 0, ts);
+            if (first == null) try { Thread.sleep(50); } catch (InterruptedException e) { break; }
+        }
+        if (first == null) return text(Response.Status.NOT_FOUND, "카메라 영상 없음 — 주행 녹화·센트리·보조 카메라가 켜져 있을 때만");
+        Response r = newChunkedResponse(Response.Status.OK, "multipart/x-mixed-replace; boundary=frame", new ViewBody(sd, w, h, fps, cfg, first, ts[0]));
+        r.addHeader("Cache-Control", "no-store"); r.addHeader("Pragma", "no-cache");
+        return r;
+    }
+    private static int clampInt(String v, int def, int lo, int hi) { try { return Math.max(lo, Math.min(hi, Integer.parseInt(v))); } catch (Throwable t) { return def; } }
+    private static double clampDbl(String v, double def, double lo, double hi) { try { return Math.max(lo, Math.min(hi, Double.parseDouble(v))); } catch (Throwable t) { return def; } }
+    private final class ViewBody extends InputStream {
+        private final int sd, w, h; private final long periodMs; private final org.json.JSONObject cfg;
+        private long lastTs, lastFrameMs = System.currentTimeMillis(), lastSentMs = 0; private byte[] cur, next; private int pos, frames; private volatile boolean closed;
+        private final long[] ts = new long[1];
+        ViewBody(int sd, int w, int h, int fps, org.json.JSONObject cfg, byte[] first, long firstTs) { this.sd = sd; this.w = w; this.h = h; this.periodMs = 1000L / fps; this.cfg = cfg; next = first; lastTs = firstTs; }
+        @Override public int read() throws IOException { byte[] b = new byte[1]; int n = read(b, 0, 1); return n < 0 ? -1 : (b[0] & 0xff); }
+        @Override public int read(byte[] b, int off, int len) throws IOException {
+            while (cur == null || pos >= cur.length) {
+                if (closed) return -1;
+                long now = System.currentTimeMillis();
+                if (next == null) {
+                    long wait = periodMs - (now - lastSentMs);
+                    if (wait > 0) { try { Thread.sleep(wait); } catch (InterruptedException e) { return -1; } continue; }
+                    next = host.clusterView(sd, w, h, cfg, lastTs, ts);
+                    if (next == null) {
+                        if (now - lastFrameMs > 5000) return -1;   // 화면 공급이 끊김 — 런처가 다시 붙거나 tile.jpg로
+                        try { Thread.sleep(15); } catch (InterruptedException e) { return -1; }
+                        continue;
+                    }
+                    lastTs = ts[0];
+                }
+                byte[] j = next; next = null;
+                lastFrameMs = lastSentMs = System.currentTimeMillis(); frames++;
+                byte[] hdr = ("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + j.length + "\r\nX-Side: " + sd + "\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+                cur = new byte[hdr.length + j.length + 2];
+                System.arraycopy(hdr, 0, cur, 0, hdr.length); System.arraycopy(j, 0, cur, hdr.length, j.length);
+                cur[cur.length - 2] = '\r'; cur[cur.length - 1] = '\n';
+                pos = 0;
+            }
+            int n = Math.min(len, cur.length - pos);
+            System.arraycopy(cur, pos, b, off, n); pos += n;
+            return n;
+        }
+        @Override public void close() { if (!closed) { closed = true; host.log("런처 view.mjpg side=" + sd + " " + w + "x" + h + (cfg != null ? " 펴기" : "") + " 종료 " + frames + "장"); } }
+    }
+
     private Response camMjpeg(boolean keep) {
         Response r = newChunkedResponse(Response.Status.OK, "multipart/x-mixed-replace; boundary=frame", new MjpegBody(keep));
         r.addHeader("Cache-Control", "no-store"); r.addHeader("Pragma", "no-cache");

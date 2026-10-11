@@ -10048,7 +10048,8 @@ public class SnifferService extends Service {
                 @Override public void clusterCamClients(int n) { clusterCamClients = n; clusterCam.onClients(n); }   // ★716 클러스터 페이지(nocam)는 카메라 예열 안 함 — 카메라 위젯을 뺐다
                 @Override public RemoteWebServer.Frame clusterFrame(long afterSeq, long waitMs) { return clusterCam.frameAfter(afterSeq, waitMs); }
                 @Override public String clusterCfgJson() { return SnifferService.this.clusterCfgJson(); }   // ★619
-                @Override public byte[] clusterTile(int side) { return clusterCam.tileJpeg(side); }       // ★619
+                @Override public byte[] clusterTile(int side) { return clusterCam.tileJpeg(side); }
+                @Override public byte[] clusterView(int side, int w, int h, org.json.JSONObject cfg, long after, long[] tsOut) { return clusterCam.viewJpeg(side, w, h, cfg, after, tsOut); }   // ★882 런처 카메라 띠       // ★619
                 @Override public void log(String msg) { postToD1("CLUSTER", msg); }
                 @Override public void noteLan() { if (relay != null) relay.noteLan(); }   // ★560 LAN 직결 감지 → 워커 폴링 완화
                 // ★565 원터치 자동연결 — QR 표시 후 60초 창 안에서만 신원을 내준다. 닫혀 있으면 값 없이 거절.
@@ -10417,6 +10418,43 @@ public class SnifferService extends Service {
         private com.cseini.motiondetect.ViewWarp warp; private String warpKey = ""; private byte[] warpBuf;
         // ★619 클러스터 편집 '카메라 화면 조정' 배경 — 예열 중 쿼드 최신 프레임에서 해당 쪽 타일 전체를 640x480 JPEG로(설정 무관 원본).
         private volatile byte[] tileNv; private volatile int tileW, tileH;
+        private volatile long tileAt;   // ★882 tileNv 받은 시각(런처 view.mjpg가 새 장인지 본다)
+        // ★882 링크락 런처 카메라 띠 — 방향별 실시간(/cluster/view.mjpg, 운영자 10-12 "주행 녹화 스트림 공유하면 되잖아").
+        //   카메라를 새로 열지 않고, 이미 받는 화면(주행 녹화·센트리의 4분할 원본 sentryTapFrame, 보조 카메라 tileNv) 중 새 것에서
+        //   그 방향 칸만 잘라(dw면 어안 펴기) 요청 크기 JPEG로. 깜빡이 화면 설정(ccam_*)은 쓰지 않고 런처가 준 값만 쓴다.
+        private final java.util.LinkedHashMap<String, com.cseini.motiondetect.ViewWarp> viewWarps = new java.util.LinkedHashMap<>();
+        byte[] viewJpeg(int sd, int ow, int oh, org.json.JSONObject cfg, long after, long[] tsOut) {
+            long now = System.currentTimeMillis();
+            byte[] a = sentryTapFrame, b = tileNv; long at = sentryTapMs, bt = tileAt;
+            if (b != null) fullCopyUntil = now + 3000;   // 보조 창이 그리는 칸만 복사 중이면 다른 칸도 채우게
+            boolean useA = a != null && (b == null || at >= bt);
+            byte[] f = useA ? a : b; int w = useA ? sentryTapW : tileW, h = useA ? sentryTapH : tileH; long ts = useA ? at : bt;
+            if (f == null || w <= 0 || h <= 0 || f.length < w * h * 3 / 2 || now - ts > 1500 || ts <= after) return null;
+            if (!useA && lastCopyPartial) return null;   // 칸만 복사한 장 — 다음 전체 장을 기다린다
+            ow &= ~1; oh &= ~1;
+            int[] tr = tileRect(w, h, sd);
+            org.json.JSONObject c = cfg;
+            if (c == null) {   // 펴지 않음 — 칸 가운데를 요청 비율로 자른다
+                double hf = Math.min(1.0, ((double) tr[2] * oh / ow) / tr[3]);
+                try { c = new org.json.JSONObject().put("x", 0).put("y", (1 - hf) / 2).put("w", 1).put("h", hf).put("dw", false); } catch (org.json.JSONException e) { return null; }
+            }
+            String key = sd + "|" + w + "x" + h + "|" + ow + "x" + oh + "|" + c;
+            com.cseini.motiondetect.ViewWarp v;
+            synchronized (viewWarps) {
+                v = viewWarps.get(key);
+                if (v == null) {
+                    if (viewWarps.size() >= 6) { java.util.Iterator<com.cseini.motiondetect.ViewWarp> it = viewWarps.values().iterator(); it.next().close(); it.remove(); }
+                    v = customWarp(c, tr, tr[2], tr[3], ow, oh);
+                    viewWarps.put(key, v);
+                }
+            }
+            byte[] out = new byte[v.width() * v.height() * 3 / 2];
+            synchronized (v) { if (!v.remap(f, w, h, out)) return null; }
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream(48 * 1024);
+            new android.graphics.YuvImage(out, android.graphics.ImageFormat.NV21, v.width(), v.height(), null).compressToJpeg(new android.graphics.Rect(0, 0, v.width(), v.height()), 60, bo);
+            tsOut[0] = ts;
+            return bo.toByteArray();
+        }
         private volatile int surfFc = 0; private android.os.HandlerThread irThread;   // ★623 더미 Surface 도착 프레임 수·비우기 스레드
         private volatile long surfCb, copyN, copyUs;   // ★792 카메라 창 병목 가르기 — 카메라가 서피스에 넣은 장 수(콜백마다)·쿼드 복사 횟수·복사 누적 µs(끝까지 누적, 창이 차이로 계산)
         @Override public long[] camCounts() { return IS_D5 ? null : new long[]{surfCb, copyN, copyUs}; }
@@ -10924,7 +10962,7 @@ public class SnifferService extends Service {
                     d5q.setRetryEnabled(true);   // 빠진 칸 다시 열기(실시간 보기와 같음)
                     boolean ok = d5q.start(getApplicationContext(), 20, (nv21, w, h) -> {
                         meta[0] = w; meta[1] = h; latestNv[0] = nv21; fc[0]++;
-                        tileNv = nv21; tileW = w; tileH = h;
+                        tileNv = nv21; tileW = w; tileH = h; tileAt = System.currentTimeMillis();
                         publishNv(nv21, w, h);
                     }, (tag, m) -> postToD1("CLUSTER", "씨라7 카메라 " + m));
                     if (!ok) { postToD1("CLUSTER", "씨라7 보조 카메라 시작 실패(캡처 데몬)"); return; }
@@ -10997,7 +11035,7 @@ public class SnifferService extends Service {
                             copyUs += (System.nanoTime() - cpT0) / 1000; copyN++;
                             pi[0] = (pi[0] + 1) % pool.length;
                             meta[0] = w; meta[1] = h; latestNv[0] = c; fc[0]++;
-                            tileNv = c; tileW = w; tileH = h;
+                            tileNv = c; tileW = w; tileH = h; tileAt = System.currentTimeMillis();
                             publishNv(c, w, h, cols);   // ★733 헤드유닛 창 직접 그리기 ★865 복사한 칸 함께
                             if (!surfOk[0]) { surfOk[0] = true; postToD1("CLUSTER", "서피스 프레임 직접 사용 " + w + "x" + h + " (콜백 경로 중지)"); if (huOverlay != null) huOverlay.prewarm(w, h); if (huOverlay2 != null) huOverlay2.prewarm(w, h); }
                         } catch (Throwable t) {
@@ -11015,7 +11053,7 @@ public class SnifferService extends Service {
                             pi[0] = (pi[0] + 1) % pool.length;
                             System.arraycopy(src, 0, c, 0, Math.min(src.length, size));
                             meta[0] = (int) a[2]; meta[1] = (int) a[3]; latestNv[0] = c; fc[0]++;
-                            tileNv = c; tileW = meta[0]; tileH = meta[1];   // ★619 클러스터 '카메라 화면 조정' 배경 스냅샷용
+                            tileNv = c; tileW = meta[0]; tileH = meta[1]; tileAt = System.currentTimeMillis();   // ★619 클러스터 '카메라 화면 조정' 배경 스냅샷용
                             publishNv(c, meta[0], meta[1]);   // ★733
                         } catch (Throwable ig) {}
                     }
