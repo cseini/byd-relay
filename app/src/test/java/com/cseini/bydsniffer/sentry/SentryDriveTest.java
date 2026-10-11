@@ -59,6 +59,14 @@ public class SentryDriveTest {
     }
 
     @Test
+    public void cachedStatus_ofDriveManagerAlwaysSaysDrive_evenBeforeAnyStatusWasBuilt() throws JSONException {
+        JSONObject d = SentryManager.drive().cachedStatusJson();
+        assertEquals("drive", d.getString("kind"));
+        assertEquals("주행 녹화 꺼짐", d.getString("why"));
+        assertEquals("sentry", SentryManager.get().cachedStatusJson().getString("kind"));
+    }
+
+    @Test
     public void managers_areSeparateInstances() {
         assertFalse(SentryManager.get().isDrive());
         assertTrue(SentryManager.drive().isDrive());

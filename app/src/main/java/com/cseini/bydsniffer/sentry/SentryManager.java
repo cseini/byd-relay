@@ -665,10 +665,14 @@ public final class SentryManager {
         JSONObject o = new JSONObject();
         try {
             o.put("state", state.name());
+            o.put("kind", drive ? "drive" : "sentry");   // 앱이 어느 쪽 상태인지 알아야 제목·설정 카드를 맞게 그린다(주행 녹화가 꺼져 있어 한 번도 상태를 못 만든 경우에도)
             o.put("why", why);
+            SentrySettings st = settings;
+            if (st != null) o.put("settings", st.toJson());   // 꺼진 주행 녹화도 앱이 "켜기" 항목을 그리려면 설정 값이 필요하다(저장소는 건드리지 않는다)
         } catch (JSONException ex) {
             log("상태 JSON 생성 실패 — " + ex);
         }
+        if (drive && host != null) publishStatus();   // 처음 열린 것이니 전체 상태(저장소 포함)를 한 번 만들어 다음 조회부터 쓴다 — 여러 번 불려도 한 번으로 합쳐진다
         return o;
     }
 
@@ -1527,8 +1531,8 @@ public final class SentryManager {
             try { host.putStatus(KEY_STALL, ""); } catch (Throwable ignored) {}
         }
         evaluate(false);
-        if (drive && !settings.enabled && state == State.IDLE) {   // 꺼진 주행 녹화는 여기서 끝 — 디스크 스캔·고아 정리 없음. 짧은 상태 한 줄만 다시 올린다(값이 같으면 업로드 변화 없음)
-            try { host.putStatus(KEY_STATUS, DRIVE_OFF_STATUS); } catch (Throwable ignored) {}   // 앱 시작 직후엔 릴레이가 아직 없어 init 때 올린 한 줄이 버려질 수 있다(10-11 운영자 차 877에서 relay_state.drive가 안 보였다)
+        if (drive && !settings.enabled && state == State.IDLE) {   // 꺼진 주행 녹화는 여기서 끝 — 디스크 스캔·고아 정리 없음. 한 번도 상태를 만든 적 없으면 짧은 상태 한 줄만 다시 올린다(값이 같으면 업로드 변화 없음)
+            if (statusCache == null) { try { host.putStatus(KEY_STATUS, DRIVE_OFF_STATUS); } catch (Throwable ignored) {} }   // 앱 시작 직후엔 릴레이가 아직 없어 init 때 올린 한 줄이 버려질 수 있다(10-11 운영자 차 877에서 relay_state.drive가 안 보였다)
             return;
         }
         if (migrateIoPending.compareAndSet(false, true)) ioPost(() -> { migrateIoPending.set(false); try { maybeMigrate(); } catch (Throwable t) { log("내장 영상 옮기기 실패 — " + t); } });   // 센트리가 IDLE(시동 ON·주행 중)이어도 돈다
