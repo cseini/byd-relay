@@ -50,6 +50,15 @@ public class SentryDriveTest {
     }
 
     @Test
+    public void driveOffStatus_isTinyValidJsonTheAppCanKeyOn() throws JSONException {
+        JSONObject o = new JSONObject(SentryManager.DRIVE_OFF_STATUS);
+        assertEquals("drive", o.getString("kind"));
+        assertEquals("IDLE", o.getString("state"));
+        assertEquals("주행 녹화 꺼짐", o.getString("why"));
+        assertTrue(SentryManager.DRIVE_OFF_STATUS.length() < 100);
+    }
+
+    @Test
     public void managers_areSeparateInstances() {
         assertFalse(SentryManager.get().isDrive());
         assertTrue(SentryManager.drive().isDrive());

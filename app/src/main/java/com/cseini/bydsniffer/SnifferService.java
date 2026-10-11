@@ -7652,8 +7652,9 @@ public class SnifferService extends Service {
                     final int seg = req.optInt("get", -1);
                     final String q = req.optString("q", "orig");   // ★화질 선택(orig·mid·low) — 센트리 세션이 추가
                     final boolean mf = req.optBoolean("mf", false);   // 784: 목차(moov)를 앞으로 옮겨(빠른 시작) 보냄 — 폰이 받는 중에 재생
-                    if (req.optBoolean("all", false)) sender.execute(() -> sendSentryEvent(dc, flow, id, q));   // ★이벤트 전체(합쳐서) — 센트리 세션 추가
-                    else sender.execute(() -> sendSentrySegment(dc, flow, id, seg, q, mf));
+                    final String kind = req.optString("kind", "");   // ★주행 녹화(운영자 10-11) — "drive"면 주행 녹화 영상을 보낸다(없으면 센트리)
+                    if (req.optBoolean("all", false)) sender.execute(() -> sendSentryEvent(dc, flow, id, q, kind));   // ★이벤트 전체(합쳐서) — 센트리 세션 추가
+                    else sender.execute(() -> sendSentrySegment(dc, flow, id, seg, q, mf, kind));
                 } catch (Throwable t) { postToD1("SENTRYRTC", "요청 형식 오류 " + rootMsg(t)); }
             }
         });
@@ -7701,9 +7702,9 @@ public class SnifferService extends Service {
 
     // ★이벤트 전체를 영상 하나로 합쳐 보낸다(센트리 세션 추가, 요청 {"all":true,"id":…,"q":…}). 합치기(필요하면 조각별 재압축 포함)는 차에서 하고 그동안 {"all":true,"state":"preparing"}.
     //   응답 {"all":true,"size":N,"q":…} → 64KB 이진 → {"all":true,"done":true}. 실패는 {"all":true,"err":"id|q|build|send"}
-    private void sendSentryEvent(org.webrtc.DataChannel dc, Object flow, String id, String q) {
+    private void sendSentryEvent(org.webrtc.DataChannel dc, Object flow, String id, String q, String kind) {
         try {
-            com.cseini.bydsniffer.sentry.SentryManager m = com.cseini.bydsniffer.sentry.SentryManager.get();
+            com.cseini.bydsniffer.sentry.SentryManager m = com.cseini.bydsniffer.sentry.SentryManager.of(kind);   // 주행 녹화면 주행 쪽 색인·저장소에서 찾는다
             if (m == null || m.index() == null) { sendSentryText(dc, new org.json.JSONObject().put("all", true).put("err", "build")); return; }
             sendSentryText(dc, new org.json.JSONObject().put("all", true).put("state", "preparing").put("q", q));
             if (!"orig".equals(q) && !q.isEmpty()) { sendSentryText(dc, new org.json.JSONObject().put("all", true).put("err", "q")); return; }   // 화질 선택(재압축)은 없어졌다 — 원본만
@@ -7736,9 +7737,9 @@ public class SnifferService extends Service {
     //   영상 데이터 요청이 다 차야 재생 시작, 목차가 앞인 파일은 0.4초에 재생 시작·끊김 없음) → 파일은 그대로 두고 보내는 순서만
     //   [ftyp][새 목차(덩어리 25프레임 단위·위치는 새 목차 길이만큼 밈)][나머지 앞부분][목차 뒤 나머지]로 바꿔 목차가 앞인 mp4로 보낸다
     //   (qt-faststart와 같은 방식, 프레임 데이터는 그대로). 머리말 "fs":true, size는 바뀐 길이. 목차가 이미 앞이거나 못 찾거나 고칠 수 없으면 그대로.
-    private void sendSentrySegment(org.webrtc.DataChannel dc, Object flow, String id, int seg, String q, boolean mf) {
+    private void sendSentrySegment(org.webrtc.DataChannel dc, Object flow, String id, int seg, String q, boolean mf, String kind) {
         try {
-            com.cseini.bydsniffer.sentry.SentryManager m = com.cseini.bydsniffer.sentry.SentryManager.get();
+            com.cseini.bydsniffer.sentry.SentryManager m = com.cseini.bydsniffer.sentry.SentryManager.of(kind);   // 주행 녹화면 주행 쪽 색인·저장소에서 찾는다
             com.cseini.bydsniffer.sentry.SentryIndex ix = m != null ? m.index() : null;
             String bad = null;
             java.io.File f = null;

@@ -237,7 +237,10 @@ public final class SentryManager {
                     } catch (Throwable t) { log("고아 조각 정리 실패 — " + t); }
                 });
             }
-            if (!drive || settings.enabled) ioPost(() -> { refreshStats(); publishStatusNow(); });   // 꺼져 있는 주행 녹화는 저장소를 건드리지 않는다(돌핀 사용자 대부분)
+            if (!drive || settings.enabled) ioPost(() -> { refreshStats(); publishStatusNow(); });
+            else {   // 꺼져 있는 주행 녹화는 저장소를 건드리지 않고 아주 짧은 상태 한 줄만 올린다 — 앱이 relay_state.drive를 보고 "센트리 | 주행 녹화" 전환을 보여 준다(운영자 10-11)
+                try { host.putStatus(KEY_STATUS, DRIVE_OFF_STATUS); } catch (Throwable ignored) {}
+            }
             try {   // 이전 실행의 마지막 흔적을 올린다(프로세스가 순간 종료됐어도 어디까지 갔는지 보이게)
                 String prevTrace = host.prefs().getString(PREF_TRACE, "");
                 if (prevTrace != null && !prevTrace.isEmpty()) host.putStatus(KEY_TRACE_PREV, prevTrace);
@@ -307,6 +310,7 @@ public final class SentryManager {
         }
     }
 
+    static final String DRIVE_OFF_STATUS = "{\"state\":\"IDLE\",\"kind\":\"drive\",\"why\":\"주행 녹화 꺼짐\"}";
     static final long DRIVE_START_DELAY_MS = 5_000L;   // 주행 녹화: 시동 ON 뒤 이 시간을 두고 게이트를 본다(다른 주행 기능이 카메라를 쥐는 순서가 가라앉은 뒤)
 
     public void onIgnition(boolean on) {
