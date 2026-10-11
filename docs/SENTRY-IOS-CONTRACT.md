@@ -390,3 +390,14 @@ struct SentryPlayerView: View { init(_ ctx: SentryContext, _ ev: SentryEvent) }
 - 계산 규칙(앱 안내 문구용): 하한 `internalFloorMb = max(4096, 전체MB × 5%)`. 예) 내장 95.4GB → 약 4.8GB를 비워 둔다.
 - 앱 화면 제안: 센트리 설정 저장 줄에 "내장 임시 저장 상한" 슬라이더(씨라7만) + 옆에 `internalLimitMb` 안내, `internalFloorHit`면 보조 문구, "USB·SD로 옮기기" 스위치(`migrate_to_external`), `internalFloorBlocked`면 상태 줄에 `why`를 그대로. 안드로이드는 아이폰 뒤에 아이폰 세션 경유로 전달.
 
+### 7.43 주행 녹화(drive) — 센트리와 같은 코드·화면, 시동이 켜진 동안 연속 녹화(운영자 10-11 "센트리와 비슷한 주행녹화 만들자 … 순정 블랙박스처럼 녹화 화면 상단에 주행 차량정보")
+- **돌핀(DiLink3) 전용**. 씨라7에서는 `주행 녹화는 돌핀(DiLink3) 전용`으로 거절한다. **기본 꺼짐**(`enabled:false`) — 켜기 전엔 아무 동작도 하지 않는다.
+- **무엇을 다루는지 고르는 법(새 명령 이름 없음)**: 원격은 기존 `SENTRY_SET·STATUS·LIST·CALENDAR·THUMB·CUT·CLEAR·DELETE·FAV·MARKS` 의 `params`에 **`"kind":"drive"`** 를 얹는다(없으면 센트리). 직결은 **`/drive/…`**(= `/sentry/…`와 같은 경로·같은 응답) 또는 아무 `/sentry/…`에 `?kind=drive`. 재생·썸네일·달력 링크는 `kind`를 따라간다. **포맷(`SENTRY_FORMAT`·`/sentry/format`)은 늘 센트리 쪽**(시동이 꺼진 동안 저장소를 쓰는 쪽).
+- **설정 키**: 센트리와 같은 키 전부 + 새 키 **`osd_drive`**(bool, 영상 맨 위 둘째 띠에 주행 정보, 주행 녹화는 기본 true·센트리는 늘 false). 저장은 `drive_` 접두어로 따로(센트리 설정과 섞이지 않음). 주행 녹화 **기본값**: `resolution:"hd"`, `fps:"reduced"`(10fps), `continuous_event_s:300`(이벤트=녹화 파일 5분), `osd_datetime·osd_battery·osd_drive:true`, `when_full:"overwrite"`, `storage:"internal"`(앱이 SD·USB·한도를 고르게).
+- **보내도 항상 꺼지는 키(강제)**: `pause_when_phone_near`(주행 중 폰은 늘 차 근처라 쉬면 영영 못 녹화) · `motion_only` · `continuous_detect` · `object_detect` · `safe_location_enabled` · `time_limit_enabled` · `notify` · `summary_announce` · `hazard_on_motion` · `screen_message`. 응답의 설정에서 false로 보인다. 움직임 감지·푸시·가동 요약·음성은 센트리 것이다.
+- **상태**: `relay_state.drive`(센트리 `relay_state.sentry`와 같은 형식, 항상 `kind:"drive"` 포함)와 `SENTRY_STATUS{kind:"drive"}`/`/drive/status`의 전체 상태(`kind:"drive"`). `why`: `주행 녹화 꺼짐`·`시동 꺼짐`·`시동 상태 미확정`·`카메라 기능 꺼짐(앱 설정)`·`실시간 보기 중`·`다른 감지 사용 중`·`12V 저전압`·`저장소 내림(…)`·`내장 여유 하한 — 녹화 중지`. 카메라를 못 열면 상태 `err`에 `다른 카메라 기능이 사용 중`·`보조 카메라 사용 중` 등.
+- **동작 규칙(최하위 소비자)**: 시동 ON **5초 뒤** 게이트를 보고 시작, 시동 OFF **즉시** 마감(센트리의 20초 대기 없음). **후진·깜빡이 보조 화면, 실시간 보기, BSD 실험, 다른 감지(전방 신호등 등)** 가 카메라를 쥐면 주행 녹화가 **양보**한다(조각을 닫고 쉼, 밀어내지 않음). 보조가 끝나면 3초 뒤 새 이벤트로 이어서 녹화하므로 후진·깜빡이마다 영상 사이에 몇 초 틈이 생긴다. 전방 신호등 감지가 켜져 있는 동안은 주행 녹화가 못 돈다(카메라 세션이 하나뿐인 구조 — 다음 단계 과제).
+- **영상 상단 정보(`osd_drive`)**: 첫 띠(시각·배터리) 바로 아래 둘째 띠에 ASCII 대문자 토큰 한 줄: 기어 `P R N D` · 속도 `NKM/H` · 깜빡이 `<L` `R>` `<HAZ>` · 등화 `POS`(차폭) `LOW`(하향) `HIGH`(상향) `RFOG`(뒤 안개) · `BRK`(브레이크) · `ACC N%`(가속). 순정 블랙박스 항목 중 **벨트·AEB·고장 경고는 값의 뜻을 실차로 확인하지 못해 뺐다**(미검증). 브레이크·가속은 순정과 같은 getter지만 돌핀에서 값이 읽힌 기록이 아직 없어 읽힐 때만 나온다. 차폭·하향등은 실차에서 0↔1 변화를 확인했다.
+- **공유 카운터**: 목록 변경 번호 `rev`(7.32)는 센트리와 같은 카운터를 쓴다 — 한쪽을 바꿔도 다른 쪽 목록 캐시가 다시 읽힐 수 있다(무해).
+- **앱 화면 제안**: 센트리 화면 위에 "센트리 | 주행" 전환(주행은 `kind:"drive"`), 주행 설정 카드(켜기·화질·프레임·저장소·한도·상단 정보 띠 스위치), 목록·재생·삭제·즐겨찾기·선택 모드는 센트리 코드를 그대로. 헤드유닛 `/sentry/ui` 에는 이미 "센트리/주행" 전환 버튼을 넣었다.
+

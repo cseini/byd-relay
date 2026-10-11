@@ -58,9 +58,16 @@ public final class SentryStorage {
     private Resolved cached;
     private boolean pinned;
 
+    private final String folder;   // 저장 폴더 이름 — 센트리는 "Sentry", 주행 녹화는 "Drive"(같은 코드·다른 폴더)
+
     public SentryStorage(Context ctx, SentrySettings s) {
+        this(ctx, s, "Sentry");
+    }
+
+    public SentryStorage(Context ctx, SentrySettings s, String folder) {
         this.ctx = ctx;
         this.settings = s;
+        this.folder = folder;
     }
 
     // 이벤트 진행 중 루트를 고정한다 — 고정 중에는 폴더 재검사·외장 복귀 재시도를 하지 않는다
@@ -253,8 +260,8 @@ public final class SentryStorage {
         File cur = root();
         List<File> cands = new ArrayList<>();
         File ext = ctx.getExternalFilesDir(null);
-        if (ext != null) cands.add(new File(ext, "Sentry"));
-        cands.add(new File(ctx.getFilesDir(), "Sentry"));
+        if (ext != null) cands.add(new File(ext, folder));
+        cands.add(new File(ctx.getFilesDir(), folder));
         for (Vol v : removableMounted()) {
             cands.add(publicDir(v));
             File app = appDir(v);
@@ -296,8 +303,8 @@ public final class SentryStorage {
         File cur = SentrySettings.isInternalOnly() ? dest : root();
         List<File> out = new ArrayList<>();
         File ext = ctx.getExternalFilesDir(null);
-        if (ext != null) out.add(new File(ext, "Sentry"));
-        out.add(new File(ctx.getFilesDir(), "Sentry"));
+        if (ext != null) out.add(new File(ext, folder));
+        out.add(new File(ctx.getFilesDir(), folder));
         List<File> keep = new ArrayList<>();
         for (File r : out) {
             String[] kids = r.list();
@@ -540,16 +547,16 @@ public final class SentryStorage {
     private File internalDir() {
         File ext = ctx.getExternalFilesDir(null);
         if (ext != null) {
-            File d = new File(ext, "Sentry");
+            File d = new File(ext, folder);
             if (probeWritable(d)) return d;
         }
-        File d = new File(ctx.getFilesDir(), "Sentry");
+        File d = new File(ctx.getFilesDir(), folder);
         d.mkdirs();
         return d;
     }
 
-    private static File publicDir(Vol v) {
-        return new File(new File(v.path, "LinkLock"), "Sentry");
+    private File publicDir(Vol v) {
+        return new File(new File(v.path, "LinkLock"), folder);
     }
 
     // getExternalFilesDirs()에서 이 볼륨 경로 아래 항목(…/Android/data/<pkg>/files) + /Sentry
@@ -560,7 +567,7 @@ public final class SentryStorage {
             if (f == null) continue;
             String p = f.getPath();
             if (p.startsWith(v.path + "/") || (v.uuid != null && p.contains("/" + v.uuid + "/"))) {
-                return new File(f, "Sentry");
+                return new File(f, folder);
             }
         }
         return null;

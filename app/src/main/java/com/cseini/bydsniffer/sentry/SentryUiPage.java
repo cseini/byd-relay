@@ -85,9 +85,10 @@ final class SentryUiPage {
     static String build(String date, List<SentryIndex.EventMeta> events, String g, Map<Integer, Integer> days, boolean favOnly, String today) {
         String gq = g == null ? "" : g;
         StringBuilder sb = new StringBuilder("<!doctype html><html lang='ko'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>센트리</title><style>")
-                .append(CSS).append("</style></head><body><div class='top'><div class='brand'>센트리</div><div class='tabs'>")
+                .append(CSS).append("</style></head><body><div class='top'><div class='brand'>").append(gq.contains("kind=drive") ? "주행" : "센트리").append("</div><div class='tabs'>")
                 .append("<a class='").append(favOnly ? "" : "on").append("' href='").append(BASE).append("?date=").append(date).append(gq).append("'>전체</a>")
                 .append("<a class='").append(favOnly ? "on" : "").append("' href='").append(BASE).append("?fav=1&date=").append(date).append(gq).append("'>즐겨찾기</a><a href='").append(BASE).append("?tab=storage").append(gq).append("'>저장소</a></div>")
+                .append(kindSwitch(gq, date))
                 .append("<a id='bsel' class='btn'>선택</a>");
         if (!favOnly) {
             sb.append("<div class='dn'><a href='").append(BASE).append("?date=").append(shiftDate(date, -1)).append(gq).append("'>◀</a><span>").append(date)
@@ -122,7 +123,7 @@ final class SentryUiPage {
                 .append("</style></head><body><div class='top'><div class='brand'>센트리</div><div class='tabs'>")
                 .append("<a href='").append(BASE).append(gq.isEmpty() ? "" : "?" + gq.substring(1)).append("'>전체</a>")
                 .append("<a href='").append(BASE).append("?fav=1").append(gq).append("'>즐겨찾기</a><a class='on' href='").append(BASE).append("?tab=storage").append(gq).append("'>저장소</a></div></div>")
-                .append("<div id='msg'></div><div class='main' style='display:block'><div id='vols'></div></div>")
+                .append("<div id='msg'></div><div class='main' style='display:block'><div id='drv'></div><div id='vols'></div></div>")
                 .append("<div style='padding:0 24px 28px'>").append(SentrySource.NOTE).append("</div><script>")
                 .append("var G=").append(jsStr(gq)).append(";function $(i){return document.getElementById(i)}var busy=false;\n")
                 .append("function q(u){return u+(G?(u.indexOf('?')<0?'?':'&')+G.substring(1):'')}\n")
@@ -139,8 +140,19 @@ final class SentryUiPage {
                 .append(" .then(function(r){return r.json()}).then(function(j){if(!j.ok){busy=false;msg('포맷 못 함: '+(j.error||'알 수 없음'));load();return;}msg('포맷 중… 카드 크기에 따라 1분 넘게 걸릴 수 있어요');poll(0)}).catch(function(e){busy=false;msg('요청 실패: '+e)})}\n")
                 .append("function poll(n){fetch(q('/sentry/status')).then(function(r){return r.json()}).then(function(s){var f=s.format;if(f&&f.state==='running'&&n<120){setTimeout(function(){poll(n+1)},3000);return;}\n")
                 .append("  busy=false;if(f&&f.state==='done')msg('포맷이 끝났어요');else if(f&&f.state==='failed')msg('포맷 실패: '+(f.why||''));else msg('결과를 확인하지 못했어요 — 저장소 목록을 보세요');load();}).catch(function(){if(n<120)setTimeout(function(){poll(n+1)},3000);else{busy=false;msg('결과를 확인하지 못했어요')}})}\n")
-                .append("load();</script></body></html>");
+                .append("function loadDrv(){fetch(q('/drive/status')).then(function(r){return r.json()}).then(function(s){var on=!!(s.settings&&s.settings.enabled);\n")
+                .append("  $('drv').innerHTML=\"<div class='vol'><div class='t'><b>주행 녹화</b><br>\"+(on?'켜짐':'꺼짐')+(s.why?' · '+s.why:'')+\" — 시동이 켜진 동안 녹화해요</div><a class='btn' id='dtog'>\"+(on?'끄기':'켜기')+\"</a></div>\";\n")
+                .append("  $('dtog').onclick=function(){fetch(q('/drive/settings'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!on})}).then(function(){setTimeout(loadDrv,600)}).catch(function(e){msg('주행 녹화 설정 실패: '+e)})}}).catch(function(){$('drv').innerHTML=''})}\n")
+                .append("load();loadDrv();</script></body></html>");
         return sb.toString();
+    }
+
+    // 센트리 ↔ 주행 녹화 전환 버튼(운영자 10-11) — 같은 화면을 kind만 바꿔 연다. gq에는 현재 kind가 들어 있다(없으면 센트리)
+    static String kindSwitch(String gq, String date) {
+        boolean drv = gq.contains("kind=drive");
+        String base = gq.replace("&kind=drive", "");
+        return "<a class='btn' style='" + (drv ? "" : "background:var(--acc);color:#0C0E11;font-weight:700") + "' href='" + BASE + "?date=" + date + base + "'>센트리</a>"
+                + "<a class='btn' style='" + (drv ? "background:var(--acc);color:#0C0E11;font-weight:700" : "") + "' href='" + BASE + "?kind=drive&date=" + date + base + "'>주행</a>";
     }
 
     // 재생 화면(/sentry/play?…&ui=1)을 런처용으로 — 맨 위에 "← 목록" 링크와 넓은 화면용 스타일을 덧붙인다(재생 화면 코드는 건드리지 않는다)

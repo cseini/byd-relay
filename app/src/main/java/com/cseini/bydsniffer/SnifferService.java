@@ -464,7 +464,8 @@ public class SnifferService extends Service {
             // ★센트리 1단계(DiLink3 전용, 공유판 포함 — 기본 꺼짐이라 켠 차만 동작) — startRelay 앞이어야 릴레이가 보내는 초기 시동 이벤트가 안 버려진다. init 실패가 onCreate를 끊지 않게 격리.
             if (!DiLink5Support.isDiLink5() || BuildConfig.D5_SENTRY) {   // ★씨라7은 -PD5_SENTRY=true 시험판에서만(운영자 10-10), 저장소는 내장 고정
                 if (DiLink5Support.isDiLink5()) com.cseini.bydsniffer.sentry.SentrySettings.setInternalOnly(true);
-                try { SentryManager.get().init(sentryHost()); } catch (Throwable t) { postToD1("SENTRY", "init 실패: " + t); }
+                try { SentryManager.get().init(sentryHost(false)); } catch (Throwable t) { postToD1("SENTRY", "init 실패: " + t); }
+                if (!IS_D5) { try { SentryManager.drive().init(sentryHost(true)); } catch (Throwable t) { postToD1("DRIVE", "init 실패: " + t); } }   // ★주행 녹화(돌핀 전용, 운영자 10-11) — drive_enabled 기본 꺼짐이라 켜기 전엔 아무 동작 없음
             }
             if (!DiLink5Support.isDiLink5()) {
                 try { BsdVision.get().setHost(bsdVisionHost()); } catch (Throwable t) { postToD1("BSDVISION", "init 실패: " + t); }
@@ -710,6 +711,7 @@ public class SnifferService extends Service {
                 sampleDataUsage();   // ★650 릴레이 자기 데이터 사용량(모바일/와이파이) 누적
                 maybeStorageDiag();   // ★654 시동 OFF 뒤 +1·5·30·120분 저장장치 관찰(재기동 뒤에도 이어감)
                 SentryManager.get().tick();   // ★센트리 — 게이트 재평가·고아 정리·상태 업로드(post라 비차단)
+                if (!IS_D5) SentryManager.drive().tick();   // ★주행 녹화
                 if (relay != null) relay.putStatus("a11y_alive_s", (int) Math.min(99999, a11yAliveAge() / 1000));   // ★a11y 심박 나이(앱 표시용 — 8초 이하=살아있음, 크면 죽음/좀비)
                 if (relay != null) { long ha = helperAliveAgeMs(); relay.putStatus("helper_alive_s", (int) (ha < 0 ? -1 : Math.min(99999, ha / 1000))); }   // ★헬퍼 a11y 심박 나이(-1=ack없음)
                 if (relay != null && DiLink5Support.isDiLink5()) relay.putStatus("d5_stage", DiLink5Support.d5Stage);   // ★580(1단계) 관측용 — hang 중에도 이 HB 루프가 살아있으면 멈춘 직전 단계 확인 가능
@@ -804,7 +806,7 @@ public class SnifferService extends Service {
                     // ★10-11 절전에서 깨어남 감지 — 이 루프는 2초마다 도는데 간격이 10초 넘게 벌어졌다면 프로세스가 통째로 멈췄다 풀린 것(헤드유닛 절전). 센트리에 알려 프레임이 죽었으면 바로 재시작
                     long wlEl = android.os.SystemClock.elapsedRealtime();
                     if (wakeLoopLastEl != 0 && wlEl - wakeLoopLastEl > 10_000L) {
-                        try { com.cseini.bydsniffer.sentry.SentryManager.get().onHostResumed(wlEl - wakeLoopLastEl); } catch (Throwable ignored) {}
+                        try { com.cseini.bydsniffer.sentry.SentryManager.get().onHostResumed(wlEl - wakeLoopLastEl); com.cseini.bydsniffer.sentry.SentryManager.drive().onHostResumed(wlEl - wakeLoopLastEl); } catch (Throwable ignored) {}
                     }
                     wakeLoopLastEl = wlEl;
                     // ★v44 사인 진단: 10초마다 심박 저장(commit=동기 디스크) → 다음 시작 때 사망 시각 역산.
@@ -2481,9 +2483,11 @@ public class SnifferService extends Service {
         if ("CAMDUALPROBE".equals(action)) return camOffOn() ? CAM_OFF_MSG : clusterDualProbe();   // ★클러스터 2단계 진단(2026-09-17) — 전방 감지 중 AVM view5 동시 open 가능 여부 실차 판정
         if ("SENTRY_SET".equals(action) || "SENTRY_STATUS".equals(action) || "SENTRY_LIST".equals(action) || "SENTRY_CALENDAR".equals(action) || "SENTRY_CLEAR".equals(action) || "SENTRY_DELETE".equals(action) || "SENTRY_FORMAT".equals(action) || "SENTRY_FAV".equals(action) || "SENTRY_THUMB".equals(action) || "SENTRY_CUT".equals(action) || "SENTRY_MARKS".equals(action)) {   // ★센트리(docs/SENTRY-DESIGN.md 훅 v2) — relay-loop 인라인이라 SET은 새 스레드로 넘기고 즉시 반환, STATUS는 파일시스템을 안 만지는 캐시만
             if (DiLink5Support.isDiLink5() && !BuildConfig.D5_SENTRY) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";   // ★공유판은 매니저 미초기화라 ok:true로 오인되지 않게 거부(씨라7 시험판 D5_SENTRY만 예외)
-            if ("SENTRY_STATUS".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().cachedStatusJson().toString()); return null; }   // ★null=ok:true, 상태는 data로(DATAUSE 방식)
-            if ("SENTRY_LIST".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteList(params != null ? params.optString("date") : null).toString()); return null; }   // ★집에서 보는 목록 — 하루치 7000자 이내(워커 8000자 절단)
-            if ("SENTRY_CUT".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().cutNow().toString()); return null; }   // ★지금 보기 — 현재 조각을 바로 닫음(최대 약 3초 대기)
+            final SentryManager sm = SentryManager.of(params != null ? params.optString("kind") : null);   // ★주행 녹화(운영자 10-11) — 같은 SENTRY_* 명령에 params.kind:"drive"를 실으면 주행 녹화 쪽을 다룬다(기본은 센트리). 돌핀 전용: 씨라7은 위에서 이미 걸러진다
+            if (sm.isDrive() && IS_D5) return "주행 녹화는 돌핀(DiLink3) 전용";
+            if ("SENTRY_STATUS".equals(action)) { RelayClient.RESULT_DATA.set(sm.cachedStatusJson().toString()); return null; }   // ★null=ok:true, 상태는 data로(DATAUSE 방식)
+            if ("SENTRY_LIST".equals(action)) { RelayClient.RESULT_DATA.set(sm.remoteList(params != null ? params.optString("date") : null).toString()); return null; }   // ★집에서 보는 목록 — 하루치 7000자 이내(워커 8000자 절단)
+            if ("SENTRY_CUT".equals(action)) { RelayClient.RESULT_DATA.set(sm.cutNow().toString()); return null; }   // ★지금 보기 — 현재 조각을 바로 닫음(최대 약 3초 대기)
             if ("SENTRY_FAV".equals(action)) {   // ★여러 영상 즐겨찾기(운영자 10-11) — params {"ids":[…]}(최대 100개) 또는 {"id":"…"}, "favorite":true|false(기본 true). 응답 {"ok","updated":[…],"failed":[{"id","error"}],"count","favorite"}
                 java.util.List<String> favs = new java.util.ArrayList<>();
                 if (params != null) {
@@ -2493,7 +2497,7 @@ public class SnifferService extends Service {
                     if (!one.isEmpty()) favs.add(one);
                 }
                 if (favs.isEmpty()) return "즐겨찾기할 id가 없음";
-                RelayClient.RESULT_DATA.set(SentryManager.get().favoriteEvents(favs, params == null || params.optBoolean("favorite", true)).toString()); return null;
+                RelayClient.RESULT_DATA.set(sm.favoriteEvents(favs, params == null || params.optBoolean("favorite", true)).toString()); return null;
             }
             if ("SENTRY_DELETE".equals(action)) {   // ★여러 영상 삭제(운영자 10-11) — params {"ids":[…]}(최대 100개) 또는 {"id":"…"}. 응답 {"ok","deleted":[…],"gone":[…],"failed":[{"id","error"}],"count"}
                 java.util.List<String> dels = new java.util.ArrayList<>();
@@ -2504,21 +2508,21 @@ public class SnifferService extends Service {
                     if (!one.isEmpty()) dels.add(one);
                 }
                 if (dels.isEmpty()) return "삭제할 id가 없음";
-                RelayClient.RESULT_DATA.set(SentryManager.get().deleteEvents(dels).toString()); return null;
+                RelayClient.RESULT_DATA.set(sm.deleteEvents(dels).toString()); return null;
             }
             if ("SENTRY_FORMAT".equals(action)) {   // ★외장(SD·USB) 포맷(운영자 10-11) — params {"kind":"sd|usb","id":"<볼륨 id>","confirm":"format"}. 시동 OFF에서만, 응답 {"ok","pending"}, 진행·결과는 relay_state.sentry fmt / SENTRY_STATUS format
                 RelayClient.RESULT_DATA.set(SentryManager.get().formatVolume(params != null ? params.optString("kind") : null, params != null ? params.optString("id") : null, params != null ? params.optString("confirm") : null).toString()); return null;
             }
-            if ("SENTRY_CLEAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().clearAll(params != null ? params.optString("confirm") : null).toString()); return null; }   // ★녹화 전체 삭제 — confirm:"all" 필수, 지우기는 뒤에서 이어짐
-            if ("SENTRY_CALENDAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteCalendar(params != null ? params.optString("month") : null).toString()); return null; }   // ★집에서 보는 달력 — 한 달치 날짜별 이벤트 수
+            if ("SENTRY_CLEAR".equals(action)) { RelayClient.RESULT_DATA.set(sm.clearAll(params != null ? params.optString("confirm") : null).toString()); return null; }   // ★녹화 전체 삭제 — confirm:"all" 필수, 지우기는 뒤에서 이어짐
+            if ("SENTRY_CALENDAR".equals(action)) { RelayClient.RESULT_DATA.set(sm.remoteCalendar(params != null ? params.optString("month") : null).toString()); return null; }   // ★집에서 보는 달력 — 한 달치 날짜별 이벤트 수
             if ("SENTRY_MARKS".equals(action)) {   // ★집에서 보는 시간축 표시·객체 판정(운영자판 10-09) — marks·objects·알림 사진(7200자 이내)
                 if (!BuildConfig.IS_OPERATOR) return "센트리 표시는 운영자판 전용";
-                RelayClient.RESULT_DATA.set(SentryManager.get().remoteMarks(params != null ? params.optString("id") : null).toString()); return null;
+                RelayClient.RESULT_DATA.set(sm.remoteMarks(params != null ? params.optString("id") : null).toString()); return null;
             }
-            if ("SENTRY_THUMB".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteThumb(params != null ? params.optString("id") : null).toString()); return null; }   // ★집에서 보는 썸네일 base64 6000자 이내
+            if ("SENTRY_THUMB".equals(action)) { RelayClient.RESULT_DATA.set(sm.remoteThumb(params != null ? params.optString("id") : null).toString()); return null; }   // ★집에서 보는 썸네일 base64 6000자 이내
             final org.json.JSONObject sentryParams = params != null ? params.optJSONObject("sentry") : null;
             new Thread(() -> {
-                try { SentryManager.get().applySet(sentryParams); }
+                try { sm.applySet(sentryParams); }
                 catch (Throwable t) { postToD1("SENTRY", "SENTRY_SET 적용 예외: " + t); }
             }, "sentry-set").start();
             RelayClient.RESULT_DATA.set("{\"pending\":true}"); return null;   // ★적용은 비동기 — 결과는 relay_state.sentry / SENTRY_STATUS로
@@ -2657,6 +2661,7 @@ public class SnifferService extends Service {
                 bsdYoloPreload(false);   // ★868
                 mainHandler.postDelayed(this::launcherUpdateCheck, 60000);   // ★872 링크락 런처 새 판(켜 둔 경우만, 시동 끈 1분 뒤)
                 SentryManager.get().onIgnition(false);   // ★센트리 — OFF +20초에 게이트 평가(앞 문장이 예외를 던져도 불리도록 첫 줄)
+                SentryManager.drive().onIgnition(false);   // ★주행 녹화 — 바로 마감
                 setSplitOwned(false);   // ★724 시동 끄면 이번에 띄운 분할 기억도 끝
                 if (prefs != null) prefs.edit().putLong("sd_off_ts", System.currentTimeMillis()).putInt("sd_done", 0).apply();
                 new Thread(() -> {
@@ -2669,6 +2674,7 @@ public class SnifferService extends Service {
             };
             relay.onIgnitionOn = () -> {
                 SentryManager.get().onIgnition(true);   // ★센트리 — 즉시 중지(앞 문장이 예외를 던져도 불리도록 첫 줄)
+                SentryManager.drive().onIgnition(true);   // ★주행 녹화 — 5초 뒤 게이트 평가
                 mainHandler.postDelayed(() -> { if (relay != null && relay.ignitionState() == 1) bsdYoloPreload(true); }, 20000);   // ★868 헤드유닛이 다 뜬 뒤 BSD용 YOLO 미리 불러 두기
                 setSplitOwned(false);   // ★724 새 시동 — 지난 시동에 띄운 분할은 잊는다(시작 앱이 다시 띄우면 그때 다시 지킴)
                 mainHandler.postDelayed(this::maybeUpdatePrompt, 20000); approachLaunchDone = false; maybeApproachLaunch();
@@ -3181,7 +3187,7 @@ public class SnifferService extends Service {
                 @Override public void onReceive(android.content.Context c, Intent it) {
                     String a = it.getAction() == null ? "?" : it.getAction().substring(it.getAction().lastIndexOf('.') + 1);
                     storageEvent("미디어 " + a + " " + it.getData());
-                    if (Intent.ACTION_MEDIA_MOUNTED.equals(it.getAction())) com.cseini.bydsniffer.sentry.SentryManager.get().onExternalMounted();   // ★813 내장에 대신 저장 중이던 센트리를 외장으로 복귀(시동 OFF 직후 SD가 무장보다 2초 늦게 붙던 것, 10-06 18:12)
+                    if (Intent.ACTION_MEDIA_MOUNTED.equals(it.getAction())) { com.cseini.bydsniffer.sentry.SentryManager.get().onExternalMounted(); com.cseini.bydsniffer.sentry.SentryManager.drive().onExternalMounted(); }   // ★813 내장에 대신 저장 중이던 센트리를 외장으로 복귀(시동 OFF 직후 SD가 무장보다 2초 늦게 붙던 것, 10-06 18:12)
                 }
             }, mf);
             android.content.IntentFilter uf = new android.content.IntentFilter();
@@ -4350,7 +4356,7 @@ public class SnifferService extends Service {
     //   브레이크 setting SET_VCU_BREAK_PEDAL_STATS_S(1=밟음) · 가속 speed SPEED_ACCELERATOR_VALID_FLAG==1일 때 getAccelerateDeepness()(0~100)
     //   · 조명 light.getLightStatus(1 차폭·2 하향·3 상향·7 뒤 안개, 1=켜짐 — sys.car.protocol이 CANFD면 뒤 안개는 LIGHT_REAR_FOG_LAMPS)
     //   · 운전석 벨트 instrument.getSafetyBeltStatus(1)(값 뜻 실차 확인 전이라 원값만). 키마다 처음 5번 바뀔 때 CDRSIG 로그(해석 확인용).
-    private final java.util.Map<String, Integer> cdrLast = new java.util.HashMap<>(), cdrLogN = new java.util.HashMap<>();
+    private final java.util.Map<String, Integer> cdrLast = new java.util.concurrent.ConcurrentHashMap<>(), cdrLogN = new java.util.HashMap<>();   // cdrLast는 주행 녹화 OSD(인코더 스레드)도 읽는다
     private Boolean cdrCanFd;
     private void publishCdrSignals() {
         if (relay == null || IS_D5) return;
@@ -4566,6 +4572,35 @@ public class SnifferService extends Service {
     private int cdrFeat(Object dev, String name) {
         try { return dev == null ? NA : getFeatureInt(dev, featureIdByName(name)); } catch (Throwable t) { return NA; }
     }
+    // ★주행 녹화 영상 맨 위 둘째 띠의 주행 정보 한 줄(운영자 10-11 "순정 블랙박스처럼") — 이미 캐시된 값만 읽는다(프레임마다 BYD getter를 부르지 않음). ASCII 대문자 토큰:
+    //   기어 P/R/N/D · 속도 KM/H · 깜빡이 <L / R> / <HAZ> · 등화 POS(차폭) LOW(하향) HIGH(상향) RFOG(뒤 안개) · 브레이크 BRK · 가속 ACC N%.
+    //   벨트·AEB·고장 경고는 값의 뜻을 실차로 확인하지 못해 뺐다(순정 블랙박스 항목이지만 미검증). 브레이크·가속은 순정과 같은 getter인데 돌핀에서 값이 읽힌 기록이 아직 없어 읽힐 때만 나온다.
+    private String driveOsdLine() {
+        StringBuilder sb = new StringBuilder(64);
+        int g = lastGearVal;
+        sb.append(g == 3 ? 'P' : g == 1 ? 'R' : g == 2 ? 'D' : g == 0 ? 'N' : '-');
+        double sp = lastSpeed;
+        sb.append("  ").append(Double.isNaN(sp) ? "--" : String.valueOf(Math.max(0L, Math.round(sp)))).append("KM/H");
+        Object tf = relay != null ? relay.getStatus("turnflash") : null;
+        if (tf instanceof Integer) {
+            int t = (Integer) tf;
+            if (t == 2) sb.append("  <L");
+            else if (t == 4) sb.append("  R>");
+            else if (t == 6) sb.append("  <HAZ>");
+        }
+        Integer b = cdrLast.get("brake_pedal");
+        if (b != null && b == 1) sb.append("  BRK");
+        Integer a = cdrLast.get("accel_pct");
+        if (a != null && a > 0) sb.append("  ACC ").append(Math.min(100, a)).append('%');
+        StringBuilder li = new StringBuilder();
+        if (cdrOn("side_light")) li.append(" POS");
+        if (cdrOn("low_beam_ls")) li.append(" LOW");
+        if (cdrOn("high_beam_ls")) li.append(" HIGH");
+        if (cdrOn("rear_fog")) li.append(" RFOG");
+        if (li.length() > 0) sb.append(" ").append(li);
+        return sb.toString();
+    }
+    private boolean cdrOn(String key) { Integer v = cdrLast.get(key); return v != null && v == 1; }
     private void cdrPut(String key, int v, String src) {
         if (v == NA || v == -1 || v == Integer.MIN_VALUE || v == -2147482648) return;
         Integer prev = cdrLast.get(key);
@@ -5246,11 +5281,11 @@ public class SnifferService extends Service {
         return true;
     }
 
-    private SentryHost sentryHost() {
+    private SentryHost sentryHost(final boolean drive) {   // drive=true면 주행 녹화 호스트 — 로그 카테고리 DRIVE, 카메라 시작은 다른 카메라 기능을 밀어내지 않는다
         return new SentryHost() {
             @Override public android.content.Context context() { return SnifferService.this; }
             @Override public android.content.SharedPreferences prefs() { return prefs; }
-            @Override public void log(String m) { postToD1("SENTRY", m); }
+            @Override public void log(String m) { postToD1(drive ? "DRIVE" : "SENTRY", m); }
             @Override public void putStatus(String key, Object val) { RelayClient rc = relay; if (rc != null) rc.putStatus(key, val); }
             @Override public void postCarEvent(String event) { RelayClient rc = relay; if (rc != null) rc.postCarEvent(event); }
             @Override public int ignitionState() { RelayClient rc = relay; int ig = rc != null ? rc.ignitionState() : -1; return (ig == 1 && sentryTestIgnOff()) ? 0 : ig; }
@@ -5261,6 +5296,7 @@ public class SnifferService extends Service {
             @Override public boolean lowVoltage() { return lowVoltFlag == 1 && lowSinceMs > 0 && System.currentTimeMillis() - lowSinceMs > lowSustainMs; }
             @Override public int batteryPct() { return lastTripSoc; }
             @Override public String runShell(String cmd) { return AdbAccess.runShell(SnifferService.this, cmd); }
+            @Override public String driveOsdText() { return drive ? driveOsdLine() : null; }
             @Override public boolean parkedStill() { return lastGearVal == 3 && lastDriving != 1 && !(lastSpeed > 0.5); }   // ★씨라7 외장 포맷 허용 조건 — 기어 P·속도 0·주행 아님
             @Override public float[] objectScores(byte[] nv21, int w, int h) { return sentryObjectScores(nv21, w, h); }
             @Override public float[][] objectDetect(byte[] nv21, int w, int h, int rx, int ry, int rw, int rh, float minScore) { return sentryObjectDetect(nv21, w, h, rx, ry, rw, rh, minScore); }
@@ -5273,6 +5309,11 @@ public class SnifferService extends Service {
             @Override public String startSentryDetect() {
                 if (allStopOn()) return "모든 자동 기능 정지 중";
                 synchronized (detectLock) {
+                    if (drive) {   // ★주행 녹화는 최하위 소비자(운영자 10-11) — 후진·깜빡이 보조·실시간 보기·BSD 실험·다른 감지를 밀어내지 않고 비어 있을 때만 연다. 보조가 오면 camDetect 선점 규칙으로 이 세션이 끊기고 곧 다시 평가한다
+                        if (rtcActive || camStreaming || h264Streaming || camProbing || bsdExp.active) return "다른 카메라 기능이 사용 중";
+                        if (clusterCam.active && !clusterCam.yieldIdle("주행 녹화")) return "보조 카메라 사용 중";   // 신호 표시 중이 아닌 대기·예열이면 주차 감지처럼 비켜 준다
+                    }
+                    SentryManager.setCameraOwner(drive);
                     if (detectActive && !detectSentryMode) {
                         if (canTapDetect()) { sentryTapsDetect = true; postToD1("SENTRY", "다른 감지(주차 카메라 감지)와 카메라 프레임을 나눠 씁니다"); return "감지 시작 — 프레임 공유"; }
                         return "다른 감지 사용 중";
@@ -5365,7 +5406,8 @@ public class SnifferService extends Service {
                 .putString("camdetect_resume", params != null ? params.toString() : "")
                 .putLong("camdetect_until", System.currentTimeMillis() + durationSec * 1000L).apply(); } catch (Throwable ignored) {}
         final int myGen = ++detectGen;   // ★이 시작의 세대 — 더 새 시작이 오면 이 스레드는 폐기
-        final int mySentryGen = sentryMode ? SentryManager.get().sessionGen() : -1;   // ★센트리 세션 번호 — finally의 종료 신호가 옛 세션 것이면 매니저가 무시
+        final SentryManager mySentryMgr = SentryManager.cameraOwner();   // ★주행 녹화와 같은 센트리 모드 세션을 쓰므로 세션을 시작한 쪽(센트리/주행)을 잡아 둔다
+        final int mySentryGen = sentryMode ? mySentryMgr.sessionGen() : -1;   // ★센트리 세션 번호 — finally의 종료 신호가 옛 세션 것이면 매니저가 무시
         detectThread = new Thread(() -> {
             Object cam = null; Class<?> ncCls = null; com.cseini.motiondetect.MotionDetector md = null;
             android.media.ImageReader dummyIr = null;   // ★백그라운드 프레임 지속용 더미 렌더 Surface
@@ -5467,9 +5509,9 @@ public class SnifferService extends Service {
                     if (f != null && f != last && meta[0] > 0) {
                         last = f;
                         procN++;
-                        if (sentryTapsDetect && !sentryMode) SentryManager.get().onFrame(f, meta[0], meta[1], android.os.SystemClock.elapsedRealtime());   // ★792 센트리와 프레임 공유(읽기 전용)
+                        if (sentryTapsDetect && !sentryMode) SentryManager.cameraOwner().onFrame(f, meta[0], meta[1], android.os.SystemClock.elapsedRealtime());   // ★792 센트리와 프레임 공유(읽기 전용)
                         if (sentryMode) {   // ★센트리 — 매 프레임 onFrame만(skip 스로틀 앞). md·트렁크 가림·조명·notify·stream 건너뜀. f는 매 프레임 새 배열이라 큐에 그대로 넘겨도 안전
-                            SentryManager.get().onFrame(f, meta[0], meta[1], android.os.SystemClock.elapsedRealtime());
+                            mySentryMgr.onFrame(f, meta[0], meta[1], android.os.SystemClock.elapsedRealtime());
                             try { Thread.sleep(20); } catch (InterruptedException ig) { break; }
                             continue;
                         }
@@ -5604,12 +5646,12 @@ public class SnifferService extends Service {
                     detectActive = false; if (!sentryMode) RelayClient.cameraActive = false; detectDriveMode = false;
                     if (sentryMode) detectSentryMode = false;
                     else {
-                        if (sentryTapsDetect) { sentryTapsDetect = false; SentryManager.get().onSessionEnded("공유하던 주차 감지가 끝남"); }   // ★792 프레임을 나눠 받던 센트리는 끊기고, 아래 재무장 평가가 새로 연다
-                        SentryManager.get().reevaluate();   // ★비센트리 세션이 끝났으니 센트리 재무장 평가(센트리 스레드는 부르지 않음 — 재무장 폭주 방지)
+                        if (sentryTapsDetect) { sentryTapsDetect = false; SentryManager.cameraOwner().onSessionEnded("공유하던 주차 감지가 끝남"); }   // ★792 프레임을 나눠 받던 센트리는 끊기고, 아래 재무장 평가가 새로 연다
+                        SentryManager.reevaluateAll();   // ★비센트리 세션이 끝났으니 센트리 재무장 평가(센트리 스레드는 부르지 않음 — 재무장 폭주 방지)
                     }
                 }
-                if (sentryMode) SentryManager.get().onSessionEnded("다른 카메라 기능이 사용 중", mySentryGen);
-                if (sentryMode && myGen != detectGen) SentryManager.get().reevaluate();   // ★792 다른 감지가 이 센트리 세션을 밀어냈으면 곧바로 재무장 평가 — 그 감지 프레임을 나눠 받아 이어 간다(1분 틱을 기다리지 않음)
+                if (sentryMode) mySentryMgr.onSessionEnded("다른 카메라 기능이 사용 중", mySentryGen);
+                if (sentryMode && myGen != detectGen) SentryManager.reevaluateAll();   // ★792 다른 감지가 이 센트리 세션을 밀어냈으면 곧바로 재무장 평가 — 그 감지 프레임을 나눠 받아 이어 간다(1분 틱을 기다리지 않음)
             }
         });
         detectThread.setName("cam-detect"); detectThread.start();
@@ -7411,7 +7453,7 @@ public class SnifferService extends Service {
                 try { if (pc != null) pc.dispose(); } catch (Throwable ig) {}
                 try { if (vsrc != null) vsrc.dispose(); } catch (Throwable ig) {}
                 try { if (factory != null) factory.dispose(); } catch (Throwable ig) {}
-                SentryManager.get().reevaluate();   // ★실시간 보기가 끝났으니 센트리 재무장 평가(카메라 정리 뒤)
+                SentryManager.reevaluateAll();   // ★실시간 보기가 끝났으니 센트리 재무장 평가(카메라 정리 뒤)
             }
         }, "camrtc"); rtcThread.start();
         return null;
@@ -10955,6 +10997,7 @@ public class SnifferService extends Service {
                 synchronized (this) { if (myGen == gen) { active = false; stopAtMs = 0; RelayClient.cameraActive = false; } }   // stopNow(gen 불일치)면 거기서 이미 내림
                 frontArmTryMs = 0;   // ★frontAutoArmTick 30s 스로틀 해제 → 다음 폴 틱(2s)에서 즉시 재무장
                 postToD1("CLUSTER", "측면 카메라 종료 side=" + side + " 지속 " + ((System.currentTimeMillis() - t0) / 1000) + "s 전송 " + sent + "프레임");
+                try { SentryManager.reevaluateAll(); } catch (Throwable ig) {}   // ★주행 녹화 — 보조 화면이 끝났으니 곧 다시 이어서 녹화(후진·깜빡이마다 1분 틱을 기다리지 않게)
             }
         }
     }
@@ -13007,7 +13050,7 @@ public class SnifferService extends Service {
                 prefs.edit().putBoolean("cam_off", off).apply();
                 if (relay != null) relay.putStatus("cam_off", off);
                 if (off) stopAllCameraUse();
-                SentryManager.get().reevaluate();   // ★790 센트리 게이트 바로 다시 보기 — 끄면 IDLE, 켜면 3초 뒤 재무장(1분 tick을 기다리지 않게)
+                SentryManager.reevaluateAll();   // ★790 센트리 게이트 바로 다시 보기 — 끄면 IDLE, 켜면 3초 뒤 재무장(1분 tick을 기다리지 않게)
                 postToD1("RELAY", "카메라 기능 " + (off ? "끔" : "켬") + " (폰 앱 설정)");
                 return null;
             }

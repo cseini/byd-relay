@@ -38,9 +38,34 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class SentryManager {
     public enum State { IDLE, ARMED, RECORDING, PAUSED }
 
-    private static final SentryManager INSTANCE = new SentryManager();
+    private static final SentryManager INSTANCE = new SentryManager(false);
+    private static final SentryManager DRIVE = new SentryManager(true);
     public static SentryManager get() { return INSTANCE; }
-    private SentryManager() {}
+    public static SentryManager drive() { return DRIVE; }   // ★주행 녹화(운영자 10-11) — 같은 코드, 폴더 Drive·설정 접두어 drive_·시동 켜짐일 때 동작
+    public static SentryManager of(String kind) { return "drive".equals(kind) ? DRIVE : INSTANCE; }
+
+    // 지금 카메라 세션(센트리 모드 camDetect)을 쥔 쪽 — 두 쪽은 시동 0/1로 게이트가 배타라 변수는 하나로 충분하다. 호스트가 세션을 시작할 때 정한다
+    private static volatile boolean driveOwnsCamera;
+    public static void setCameraOwner(boolean driveMode) { driveOwnsCamera = driveMode; }
+    public static SentryManager cameraOwner() { return driveOwnsCamera ? DRIVE : INSTANCE; }
+    public static void reevaluateAll() { INSTANCE.reevaluate(); DRIVE.reevaluate(); }
+
+    private final boolean drive;
+    private final String folder;
+    private final String PREF_ACTIVE, PREF_PAUSED_LOC, PREF_IGN_OFF_WALL, PREF_TRACE, PREF_SESS_START, PREF_SUM_PENDING, PREF_SUM_LAST, PREF_SPACE_NOTIFIED;
+    private final String KEY_STATUS, KEY_STALL, KEY_TRACE, KEY_TRACE_PREV, KEY_IO;
+
+    private SentryManager(boolean drive) {
+        this.drive = drive;
+        String px = drive ? "drive_" : "sentry_";
+        this.folder = drive ? "Drive" : "Sentry";
+        PREF_ACTIVE = px + "active"; PREF_PAUSED_LOC = px + "paused_by_location"; PREF_IGN_OFF_WALL = px + "ign_off_wall"; PREF_TRACE = px + "trace";
+        PREF_SESS_START = px + "sess_start"; PREF_SUM_PENDING = px + "sum_pending"; PREF_SUM_LAST = px + "sum_last"; PREF_SPACE_NOTIFIED = px + "space_notified";
+        KEY_STATUS = drive ? "drive" : "sentry"; KEY_STALL = px + "stall"; KEY_TRACE = px + "trace"; KEY_TRACE_PREV = px + "trace_prev"; KEY_IO = px + "io";
+        if (drive) why = "주행 녹화 꺼짐";   // 꺼진 채(기본)로는 첫 평가에서 상태가 안 바뀌어 로그·업로드·저장소 접근이 없다
+    }
+
+    public boolean isDrive() { return drive; }
 
     private static final long ARM_DELAY_MS = 20_000L;       // 시동 OFF 뒤 첫 게이트 평가
     private static final long RECOVER_DELAY_MS = 5_000L;    // 재기동 복구
@@ -54,9 +79,6 @@ public final class SentryManager {
     private static final int REMOTE_THUMB_MAX_CHARS = 6000;
     private static final Pattern REMOTE_DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
     private static final Pattern REMOTE_MONTH = Pattern.compile("^\\d{4}-(0[1-9]|1[0-2])$");
-    private static final String PREF_ACTIVE = "sentry_active";
-    private static final String PREF_PAUSED_LOC = "sentry_paused_by_location";
-    private static final String PREF_IGN_OFF_WALL = "sentry_ign_off_wall";
 
     private final Object lock = new Object();
     private volatile SentryHost host;
@@ -146,7 +168,6 @@ public final class SentryManager {
     private volatile long ioRunStartElapsed;   // 지금 도는 입출력 작업의 시작 시각(0=없음) — 오래 안 끝나면 막힌 것
     private volatile boolean ioDelayed;
     private static final long IO_TIMEOUT_MS = 5_000L;
-    private static final String PREF_TRACE = "sentry_trace";
     private final java.util.ArrayDeque<String> traceBuf = new java.util.ArrayDeque<>();
     private String lastTraceGate = "";
     // ★사람·차량 거르기(YOLO11n, 10-07 되살림) — 움직임이 잡히면 4칸에서 사람·차량 점수를 재서 기준을 넘을 때만 이벤트를 시작한다. 한 번 못 넘어도 움직임이 이어지면
@@ -194,11 +215,11 @@ public final class SentryManager {
         synchronized (this) {
             if (host != null) return;
             host = hs;
-            settings = SentrySettings.load(hs.prefs());
-            storage = new SentryStorage(hs.context(), settings);
+            settings = SentrySettings.load(hs.prefs(), drive ? "drive_" : "sentry_", drive);
+            storage = new SentryStorage(hs.context(), settings, folder);
             index = new SentryIndex(storage);
             pausedLoc = hs.prefs().getBoolean(PREF_PAUSED_LOC, false);
-            HandlerThread ht = new HandlerThread("sentry-mgr");
+            HandlerThread ht = new HandlerThread(drive ? "drive-mgr" : "sentry-mgr");
             ht.start();
             handlerThreadRef = ht;
             lastTickRunElapsed = SystemClock.elapsedRealtime();
@@ -216,12 +237,17 @@ public final class SentryManager {
                     } catch (Throwable t) { log("고아 조각 정리 실패 — " + t); }
                 });
             }
-            ioPost(() -> { refreshStats(); publishStatusNow(); });
+            if (!drive || settings.enabled) ioPost(() -> { refreshStats(); publishStatusNow(); });   // 꺼져 있는 주행 녹화는 저장소를 건드리지 않는다(돌핀 사용자 대부분)
             try {   // 이전 실행의 마지막 흔적을 올린다(프로세스가 순간 종료됐어도 어디까지 갔는지 보이게)
                 String prevTrace = host.prefs().getString(PREF_TRACE, "");
-                if (prevTrace != null && !prevTrace.isEmpty()) host.putStatus("sentry_trace_prev", prevTrace);
+                if (prevTrace != null && !prevTrace.isEmpty()) host.putStatus(KEY_TRACE_PREV, prevTrace);
             } catch (Throwable ignored) {}
-            if (wasActive) {
+            if (drive) {   // 주행 녹화는 앱이 재기동돼도 "지금 시동이 켜져 있으면 곧 시작"이면 충분하다
+                if (settings.enabled && host.ignitionState() == 1) {
+                    log("재기동 복구 — 시동 켜짐, " + (DRIVE_START_DELAY_MS / 1000) + "초 뒤 주행 녹화 게이트 평가");
+                    handler.postDelayed(restartTask, DRIVE_START_DELAY_MS);
+                }
+            } else if (wasActive) {
                 long offWall = host.prefs().getLong(PREF_IGN_OFF_WALL, 0L);
                 long elapsed = System.currentTimeMillis() - offWall;
                 long delay = recoverDelayMs(offWall, System.currentTimeMillis());
@@ -281,8 +307,24 @@ public final class SentryManager {
         }
     }
 
+    static final long DRIVE_START_DELAY_MS = 5_000L;   // 주행 녹화: 시동 ON 뒤 이 시간을 두고 게이트를 본다(다른 주행 기능이 카메라를 쥐는 순서가 가라앉은 뒤)
+
     public void onIgnition(boolean on) {
         post(() -> {
+            if (drive) {   // ★주행 녹화 — 시동이 켜지면 곧 게이트 평가, 꺼지면 바로 마감(센트리의 20초 대기·가동 요약 없음)
+                ignOffAtUptime = 0;
+                handler.removeCallbacks(armTask);
+                handler.removeCallbacks(restartTask);
+                if (on) {
+                    log("시동 ON — " + (DRIVE_START_DELAY_MS / 1000) + "초 뒤 주행 녹화 게이트 평가");
+                    if (settings.enabled) handler.postDelayed(armTask, DRIVE_START_DELAY_MS);
+                } else {
+                    log("시동 OFF — 주행 녹화 마감");
+                    storageYield = null;
+                    stopSession(State.IDLE, "시동 꺼짐", true);
+                }
+                return;
+            }
             if (on) {
                 ignOffAtUptime = 0;
                 handler.removeCallbacks(armTask);
@@ -308,11 +350,10 @@ public final class SentryManager {
 
     // ───────────── 센트리 가동 요약(운영자 10-10: 시동 끈 뒤 가동~시동 켤 때까지의 시작·종료 시각과 녹화 건수를 폰 푸시·릴레이 음성으로, 1건 이상일 때만) ─────────────
     static final long SUMMARY_DELAY_MS = 4000L;
-    static final String PREF_SESS_START = "sentry_sess_start";      // 이번 구간 시작(벽시계 ms, 0=없음) — 릴레이가 재시작돼도 남는다
-    static final String PREF_SUM_PENDING = "sentry_sum_pending";    // 아직 음성으로 안 읽은 요약 JSON
 
     // 시동이 꺼진 뒤 센트리가 처음 무장된 시각을 구간 시작으로 잡는다(이후 카메라 양보로 쉬었다 다시 무장돼도 같은 구간)
     private void noteSessionStart() {
+        if (drive) return;   // 가동 요약은 센트리 것
         try {
             if (host.ignitionState() == 1) return;
             SharedPreferences p = host.prefs();
@@ -345,7 +386,7 @@ public final class SentryManager {
             long durMin = Math.max(0L, (endWall - start) / 60000L);
             if (count < 1) { log("센트리 가동 요약 — 녹화 0건이라 알리지 않음(가동 " + durMin + "분)"); return; }
             JSONObject o = new JSONObject().put("startMs", start).put("endMs", endWall).put("count", count);
-            SharedPreferences.Editor ed = p.edit().putString("sentry_sum_last", o.toString());
+            SharedPreferences.Editor ed = p.edit().putString(PREF_SUM_LAST, o.toString());
             if (settings.summaryAnnounce) ed.putString(PREF_SUM_PENDING, o.toString()); else ed.remove(PREF_SUM_PENDING);   // 헤드유닛 안내를 켜 둔 때만 "안 읽은 요약"을 남긴다
             ed.apply();
             lastSummaryJson = o;
@@ -471,11 +512,11 @@ public final class SentryManager {
             SentryHost hsIo = host;
             if (hsIo != null) {
                 if (ist != 0 && nowIo - ist > 10_000L) {
-                    hsIo.putStatus("sentry_io", "busy " + (nowIo - ist) / 1000 + "s");
+                    hsIo.putStatus(KEY_IO, "busy " + (nowIo - ist) / 1000 + "s");
                     ioStuckReported = true;
                 } else if (ioStuckReported) {
                     ioStuckReported = false;
-                    hsIo.putStatus("sentry_io", "");
+                    hsIo.putStatus(KEY_IO, "");
                 }
             }
         } catch (Throwable ignored) {}
@@ -494,7 +535,7 @@ public final class SentryManager {
             }
             String out = sb.length() > 280 ? sb.substring(0, 280) : sb.toString();
             stallReported = true;
-            hs.putStatus("sentry_stall", out);
+            hs.putStatus(KEY_STALL, out);
             hs.log("센트리 핸들러 정지 의심 — " + out);
         } catch (Throwable ignored) {}
     }
@@ -519,7 +560,7 @@ public final class SentryManager {
         }
         JSONObject applied;
         try {
-            applied = SentrySettings.apply(hs.prefs(), p);
+            applied = SentrySettings.apply(hs.prefs(), p, drive ? "drive_" : "sentry_", drive);
         } catch (Exception e) {
             log("센트리 설정 적용 실패 — " + e);
             return errorJson("설정 적용 실패");
@@ -553,6 +594,7 @@ public final class SentryManager {
             SentrySettings s = settings;
             SentryStorage st = storage;
             o.put("state", state.name());
+            o.put("kind", drive ? "drive" : "sentry");   // 어느 쪽 상태인가(주행 녹화 10-11)
             o.put("why", why);
             o.put("cut", true);   // 능력 표시 — 진행 중인 녹화의 현재 조각을 지금 닫아 곧바로 볼 수 있게 하는 '지금 보기'(/sentry/cut·SENTRY_CUT)를 지원한다
             o.put("clear", true);   // 능력 표시 — 녹화 전체 삭제(/sentry/clear·SENTRY_CLEAR)를 지원한다. 폰은 이 값이 있을 때만 전체 삭제 버튼을 보인다
@@ -580,7 +622,7 @@ public final class SentryManager {
             JSONObject ls = lastSummaryJson;
             if (ls == null) {   // 릴레이가 재시작된 뒤에도 마지막 요약을 보여 준다
                 try {
-                    String sv = host.prefs().getString("sentry_sum_last", "");
+                    String sv = host.prefs().getString(PREF_SUM_LAST, "");
                     if (sv != null && !sv.isEmpty()) { ls = new JSONObject(sv); lastSummaryJson = ls; }
                 } catch (Throwable ignored) {}
             }
@@ -1125,9 +1167,21 @@ public final class SentryManager {
     static String gate(boolean enabled, int ignition, boolean camOff, boolean rtcActive, boolean detectActive, boolean timeAllowed,
                        boolean pausedByLocation, boolean lowVoltage, boolean pauseWhenPhoneNear, boolean phoneNearFresh,
                        String storageYield) {
-        if (!enabled) return "센트리 꺼짐";
-        if (ignition == 1) return "시동 켜짐";
-        if (ignition != 0) return "시동 상태 미확정";
+        return gate(false, enabled, ignition, camOff, rtcActive, detectActive, timeAllowed, pausedByLocation, lowVoltage, pauseWhenPhoneNear, phoneNearFresh, storageYield);
+    }
+
+    // drive=true(주행 녹화)면 시동 방향이 반대 — 켜짐(1)이어야 통과, 꺼짐(0)이면 "시동 꺼짐"
+    static String gate(boolean drive, boolean enabled, int ignition, boolean camOff, boolean rtcActive, boolean detectActive, boolean timeAllowed,
+                       boolean pausedByLocation, boolean lowVoltage, boolean pauseWhenPhoneNear, boolean phoneNearFresh,
+                       String storageYield) {
+        if (!enabled) return drive ? "주행 녹화 꺼짐" : "센트리 꺼짐";
+        if (drive) {
+            if (ignition == 0) return "시동 꺼짐";
+            if (ignition != 1) return "시동 상태 미확정";
+        } else {
+            if (ignition == 1) return "시동 켜짐";
+            if (ignition != 0) return "시동 상태 미확정";
+        }
         if (camOff) return "카메라 기능 꺼짐(앱 설정)";
         if (rtcActive) return "실시간 보기 중";
         if (detectActive) return "다른 감지 사용 중";
@@ -1149,7 +1203,7 @@ public final class SentryManager {
     static boolean needRestart(SentrySettings a, SentrySettings b) {
         if (!a.storage.equals(b.storage) || !a.resolution.equals(b.resolution) || !a.codec.equals(b.codec)
                 || !a.fps.equals(b.fps) || a.bitrateKbps != b.bitrateKbps || a.motionOnly != b.motionOnly
-                || a.osdDatetime != b.osdDatetime || a.osdBattery != b.osdBattery || !a.osdPos.equals(b.osdPos)
+                || a.osdDatetime != b.osdDatetime || a.osdBattery != b.osdBattery || a.osdDrive != b.osdDrive || !a.osdPos.equals(b.osdPos)
                 || !java.util.Arrays.equals(a.layoutMap, b.layoutMap) || !java.util.Arrays.equals(a.layoutFlip, b.layoutFlip) || !a.cellViews.toString().equals(b.cellViews.toString())) return true;
         if (a.continuousDetect != b.continuousDetect) return true;   // 감지기를 만들거나 없애야 한다
         if (b.needsMotionDetector()) {
@@ -1192,8 +1246,8 @@ public final class SentryManager {
         if (clearing.get()) return "전체 삭제 중";
         SentryHost hs = host;
         SentrySettings s = settings;
-        String g = gate(s.enabled, hs.ignitionState(), hs.camOff(), hs.rtcActive(), hs.detectActive(),
-                s.timeAllows(System.currentTimeMillis()), pausedLoc, hs.lowVoltage(),
+        String g = gate(drive, s.enabled, hs.ignitionState(), hs.camOff(), hs.rtcActive(), hs.detectActive(),
+                s.timeAllows(System.currentTimeMillis()), !drive && pausedLoc, hs.lowVoltage(),
                 s.pauseWhenPhoneNear, hs.phoneNearFresh(), ("internal".equals(s.storage) || SentrySettings.isInternalOnly()) ? null : storageYield);
         if (g == null && floorBlockedCache) return "내장 여유 하한 — 녹화 중지";   // 차량 시스템 보호(운영자 10-11) — 하한 아래에서는 어느 저장 정책이든 새 녹화를 하지 않는다
         if (g == null && s.whenFullStop() && spaceLevelCache >= 3) return "저장 공간 가득 — 녹화 중지";   // 지우지 않기를 골랐으니 영상을 지우거나 한도를 늘릴 때까지 쉰다(그때 자동 재개)
@@ -1227,7 +1281,7 @@ public final class SentryManager {
     }
 
     private State gateFailState() {
-        return (!settings.enabled || host.ignitionState() == 1 || host.camOff()) ? State.IDLE : State.PAUSED;
+        return (!settings.enabled || host.ignitionState() == (drive ? 0 : 1) || host.camOff()) ? State.IDLE : State.PAUSED;
     }
 
     private int armFailures;          // 연속 무장·세션 실패 횟수(씨라7 재시도 간격용)
@@ -1260,7 +1314,7 @@ public final class SentryManager {
         // ★저장소 준비(볼륨 목록 바인더 호출·폴더 쓰기 시험)는 별도 스레드에서 5초까지만 기다린다 — 외장 입출력이 죽어 있으면 여기서 핸들러가 통째로 멈추던 것(FB2106·193407)
         final long t0 = SystemClock.elapsedRealtime();
         Object[] prep = ioCall("저장소 준비", IO_TIMEOUT_MS, () -> {
-            SentryStorage ns = new SentryStorage(hs.context(), s);
+            SentryStorage ns = new SentryStorage(hs.context(), s, folder);
             boolean mounted = "internal".equals(s.storage) || SentrySettings.isInternalOnly() || ns.externalMounted();   // 씨라7 시험판은 내장에 쓰므로 외장을 기다리지 않는다
             ns.pin();   // 이벤트가 끝날 때까지 루트 고정 — 도중 재해석으로 조각이 갈라지는 것 방지(외장 미마운트면 여기서 내장으로 해석)
             return new Object[]{ns, mounted};
@@ -1273,7 +1327,7 @@ public final class SentryManager {
             try {
                 org.json.JSONObject j = s.toJson();
                 j.put("storage", "internal");
-                ns = new SentryStorage(hs.context(), SentrySettings.fromJson(j));
+                ns = new SentryStorage(hs.context(), SentrySettings.fromJson(j), folder);
                 ns.pin();
             } catch (Throwable t) {
                 err = "저장소 준비 실패 " + t;
@@ -1389,8 +1443,10 @@ public final class SentryManager {
         why = w;
         if (changed) { log("센트리 상태 " + from + "→" + to + " — " + w); trace(from.name() + "→" + to.name() + " " + w); }
         if (to == State.ARMED) noteSessionStart();
-        if (to == State.ARMED || to == State.RECORDING) setActive(true);
-        else if (to == State.IDLE) setActive(false);
+        if (!drive) {   // 센트리 재기동 복구용 기록 — 주행 녹화는 쓰지 않는다
+            if (to == State.ARMED || to == State.RECORDING) setActive(true);
+            else if (to == State.IDLE) setActive(false);
+        }
         if (changed) publishStatus();
     }
 
@@ -1409,7 +1465,7 @@ public final class SentryManager {
 
     private void reconfigureTask() {
         SentrySettings old = settings;
-        SentrySettings ns = SentrySettings.load(host.prefs());
+        SentrySettings ns = SentrySettings.load(host.prefs(), drive ? "drive_" : "sentry_", drive);
         settings = ns;
         State st = state;
         boolean active = st == State.ARMED || st == State.RECORDING;
@@ -1433,7 +1489,7 @@ public final class SentryManager {
         }
         if (!active || old.limitMb != ns.limitMb || old.internalLimitMb != ns.internalLimitMb) {
             SentryStorage prev = storage;
-            storage = new SentryStorage(host.context(), ns);
+            storage = new SentryStorage(host.context(), ns, folder);
             if (active) storage.pinTo(prev);   // 녹화 중이면 지금 쓰는 루트를 그대로 이어받는다
             index = new SentryIndex(storage);
         }
@@ -1463,9 +1519,10 @@ public final class SentryManager {
         lastTickRunElapsed = SystemClock.elapsedRealtime();
         if (stallReported) {
             stallReported = false;
-            try { host.putStatus("sentry_stall", ""); } catch (Throwable ignored) {}
+            try { host.putStatus(KEY_STALL, ""); } catch (Throwable ignored) {}
         }
         evaluate(false);
+        if (drive && !settings.enabled && state == State.IDLE) return;   // 꺼진 주행 녹화는 여기서 끝 — 디스크 스캔·고아 정리·업로드 없음
         if (migrateIoPending.compareAndSet(false, true)) ioPost(() -> { migrateIoPending.set(false); try { maybeMigrate(); } catch (Throwable t) { log("내장 영상 옮기기 실패 — " + t); } });   // 센트리가 IDLE(시동 ON·주행 중)이어도 돈다
         if (!settings.enabled && state == State.IDLE && state == publishedState && why.equals(publishedWhy)) return;   // ★꺼짐+IDLE이고 올린 상태가 현재와 같으면 디스크 스캔·업로드·고아 정리 생략(꺼진 차는 매분 저장소를 안 만진다)
         long now = SystemClock.elapsedRealtime();
@@ -1595,16 +1652,16 @@ public final class SentryManager {
         spaceLevelCache = level;
         SentryHost hs = host;
         if (hs == null) return;
-        if (spaceNotified < 0) spaceNotified = hs.prefs().getInt("sentry_space_notified", 0);
+        if (spaceNotified < 0) spaceNotified = hs.prefs().getInt(PREF_SPACE_NOTIFIED, 0);
         if (level > spaceNotified) {
             spaceNotified = level;
-            hs.prefs().edit().putInt("sentry_space_notified", level).apply();
+            hs.prefs().edit().putInt(PREF_SPACE_NOTIFIED, level).apply();
             int shown = level >= 3 ? 100 : level == 2 ? SPACE_CRIT_PCT : SPACE_WARN_PCT;
             log("저장 공간 " + shown + "% — 알림" + (s.notify ? "" : "(알림 설정이 꺼져 있어 보내지 않음)") + " · 사용 " + used + "MB / 한도 " + limit + "MB");
             if (s.notify) hs.postCarEvent("sspace:" + shown);
         } else if (spaceNotified > 0 && pct < 70) {   // 영상을 지워 70% 밑으로 내려가면 다음 80%·95%·가득 때 다시 알린다
             spaceNotified = 0;
-            hs.prefs().edit().putInt("sentry_space_notified", 0).apply();
+            hs.prefs().edit().putInt(PREF_SPACE_NOTIFIED, 0).apply();
         }
     }
 
@@ -1634,6 +1691,7 @@ public final class SentryManager {
         try {
             JSONObject o = new JSONObject();
             o.put("state", state.name());
+            if (drive) o.put("kind", "drive");
             o.put("why", why);
             o.put("clear", true);
             o.put("pausedByLocation", pausedLoc);
@@ -1658,7 +1716,7 @@ public final class SentryManager {
             o.put("fps", e == null ? 0 : e.encodedFpsLast10s());
             o.put("drop", e == null ? 0 : e.droppedFrames());
             statusCache = o.toString();
-            hs.putStatus("sentry", trimStatus(o));
+            hs.putStatus(KEY_STATUS, trimStatus(o));
             publishedState = state;
             publishedWhy = why;
         } catch (Throwable t) { log("상태 업로드 실패 — " + t); }
@@ -1717,7 +1775,7 @@ public final class SentryManager {
             }
             if (s.osdDatetime || s.osdBattery) {
                 final SentryHost osdHost = host;
-                final SentryOsd osd = new SentryOsd(s.osdDatetime, s.osdBattery, s.osdPos, osdHost::batteryPct);
+                final SentryOsd osd = new SentryOsd(s.osdDatetime, s.osdBattery, s.osdPos, osdHost::batteryPct, drive && s.osdDrive ? osdHost::driveOsdText : null);   // 주행 녹화는 맨 위 둘째 띠에 주행 정보(기어·속도·깜빡이·등화·브레이크·가속)
                 final AtomicBoolean osdFailLogged = new AtomicBoolean();
                 e.setOverlay((buf, ow, oh, wall) -> {
                     try {
@@ -2378,7 +2436,7 @@ public final class SentryManager {
             SentryHost hs = host;
             if (hs == null) return;
             try { hs.prefs().edit().putString(PREF_TRACE, joined).apply(); } catch (Throwable ignored) {}
-            hs.putStatus("sentry_trace", joined);
+            hs.putStatus(KEY_TRACE, joined);
         } catch (Throwable ignored) {}
     }
 

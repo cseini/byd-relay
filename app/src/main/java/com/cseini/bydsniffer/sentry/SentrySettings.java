@@ -26,7 +26,7 @@ public final class SentrySettings {
             "time_limit_enabled", "time_mode", "time_from", "time_to",
             "safe_location_enabled", "hazard_on_motion", "screen_message",
             "sensitivity", "min_detect_s", "roi_enabled", "rois", "layout_map", "layout_flip",
-            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "when_full", "internal_limit_mb", "migrate_to_external", "summary_announce", "continuous_event_s", "continuous_detect", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
+            "preroll_s", "post_s", "fps", "bitrate_kbps", "codec", "shadow_filter", "light_change_filter", "cell_views", "filter_person", "filter_vehicle", "object_detect", "detect_person", "detect_vehicle", "when_full", "osd_drive", "internal_limit_mb", "migrate_to_external", "summary_announce", "continuous_event_s", "continuous_detect", "pause_when_phone_near", "test_ign_off_until"};   // 옛 키 dewarp(10-07 cell_views로 대체)는 목록에 없어 받아도 무시된다
 
     private static final String[] STORAGES = {"internal", "sd", "usb"};
     private static final String[] RESOLUTIONS = {"hd", "fhd", "original"};
@@ -54,6 +54,7 @@ public final class SentrySettings {
     public final boolean osdDatetime;
     public final boolean osdBattery;
     public final String osdPos;
+    public final boolean osdDrive;   // 영상 맨 위 띠에 주행 정보(기어·속도·깜빡이·등화·브레이크·가속·벨트)를 넣는다 — 주행 녹화(drive) 전용, 센트리는 늘 끔(순정 블랙박스처럼, 운영자 10-11)
     public final boolean filterPerson;    // 움직임 감지 모드에서 "사람"이 있을 때만 이벤트·알림(기본 꺼짐, YOLO11n — 10-07 되살림)
     public final boolean filterVehicle;
     public final int continuousEventS;    // 연속 녹화(motion_only=false) 때 이벤트(녹화 파일) 하나의 길이(초) — 30~600, 30초 단위, 기본 600(운영자 10-10, 최대 10분). 움직임 녹화에는 영향 없음
@@ -103,6 +104,7 @@ public final class SentrySettings {
         osdDatetime = bool(o, "osd_datetime", true);
         osdBattery = bool(o, "osd_battery", true);
         osdPos = normalizeOsdPos(o.opt("osd_pos"));
+        osdDrive = bool(o, "osd_drive", false);
         cellViews = internalOnly ? new JSONObject() : normalizeCellViews(o.opt("cell_views"));   // 씨라7 시험판: 어안 보정표는 돌핀 렌즈 기준이라 쓰지 않는다
         filterPerson = bool(o, "filter_person", false);
         filterVehicle = bool(o, "filter_vehicle", false);
@@ -154,23 +156,67 @@ public final class SentrySettings {
     }
 
     public static SentrySettings load(SharedPreferences p) {
-        JSONObject o = new JSONObject();
+        return load(p, PREFIX, false);
+    }
+
+    // ★주행 녹화(drive, 운영자 10-11 "센트리와 비슷한 주행녹화") — 같은 설정 클래스를 접두어(drive_)와 기본값·강제값만 달리해 쓴다
+    //   기본: 꺼짐·HD·10fps·연속 녹화 5분 단위·시각/배터리/주행 정보 띠 켬. 강제(저장돼 있어도 무시): 폰 근처 쉬기·움직임 녹화·움직임 감지·객체 확인·안전 위치·시간 제한·알림·가동 요약 모두 끔
+    //   (주행 중에는 폰이 늘 차 근처이고, 감지·알림은 센트리 것이며, BSD가 이미 객체 인식을 돌린다)
+    static JSONObject driveDefaults() {
+        JSONObject d = new JSONObject();
+        try {
+            d.put("resolution", "hd");
+            d.put("fps", "reduced");
+            d.put("continuous_event_s", 300);
+            d.put("osd_datetime", true);
+            d.put("osd_battery", true);
+            d.put("osd_drive", true);
+        } catch (JSONException e) {
+            throw new IllegalStateException(e);
+        }
+        return d;
+    }
+
+    static JSONObject driveForce(JSONObject o) {
+        try {
+            o.put("pause_when_phone_near", false);
+            o.put("motion_only", false);
+            o.put("continuous_detect", false);
+            o.put("object_detect", false);
+            o.put("safe_location_enabled", false);
+            o.put("time_limit_enabled", false);
+            o.put("notify", false);
+            o.put("summary_announce", false);
+            o.put("hazard_on_motion", false);
+            o.put("screen_message", false);
+        } catch (JSONException e) {
+            throw new IllegalStateException(e);
+        }
+        return o;
+    }
+
+    public static SentrySettings load(SharedPreferences p, String prefix, boolean drive) {
+        JSONObject o = drive ? driveDefaults() : new JSONObject();
         try {
             for (Map.Entry<String, ?> e : p.getAll().entrySet()) {
                 String k = e.getKey();
-                if (e.getValue() == null || !k.startsWith(PREFIX)) continue;
-                String name = k.substring(PREFIX.length());
+                if (e.getValue() == null || !k.startsWith(prefix)) continue;
+                String name = k.substring(prefix.length());
                 if (Arrays.asList(KEYS).contains(name)) o.put(name, e.getValue());
             }
         } catch (JSONException e) {
             throw new IllegalStateException("센트리 설정 읽기 실패: " + e.getMessage(), e);
         }
-        return new SentrySettings(o);
+        return new SentrySettings(drive ? driveForce(o) : o);
     }
 
     // partial에 든 알려진 키만 현재 값 위에 덮어 검증·클램프 → 그 키만 저장 → 적용된 전체 설정 JSON
     public static JSONObject apply(SharedPreferences p, JSONObject partial) {
-        JSONObject merged = load(p).toJson();
+        return apply(p, partial, PREFIX, false);
+    }
+
+    public static JSONObject apply(SharedPreferences p, JSONObject partial, String prefix, boolean drive) {
+        JSONObject merged = load(p, prefix, drive).toJson();
         List<String> touched = new ArrayList<>();
         try {
             if (partial.has("cell_views")) {   // 칸 단위 병합 — {"2":{…}}는 그 칸만 바꾸고 {"2":null}은 그 칸 삭제, 통째 null은 전부 삭제
@@ -183,11 +229,11 @@ public final class SentrySettings {
                     touched.add(k);
                 }
             }
-            JSONObject out = new SentrySettings(merged).toJson();
+            JSONObject out = new SentrySettings(drive ? driveForce(merged) : merged).toJson();
             SharedPreferences.Editor ed = p.edit();
             for (String k : touched) {
                 Object v = out.get(k);
-                String key = PREFIX + k;
+                String key = prefix + k;
                 if (v instanceof Boolean) ed.putBoolean(key, (Boolean) v);
                 else if (v instanceof Number) ed.putInt(key, ((Number) v).intValue());
                 else ed.putString(key, v.toString());
@@ -213,6 +259,7 @@ public final class SentrySettings {
             o.put("filter_person", filterPerson);
             o.put("filter_vehicle", filterVehicle);
             o.put("when_full", whenFull);
+            o.put("osd_drive", osdDrive);
             o.put("internal_limit_mb", internalLimitMb);
             o.put("migrate_to_external", migrateToExternal);
             o.put("summary_announce", summaryAnnounce);

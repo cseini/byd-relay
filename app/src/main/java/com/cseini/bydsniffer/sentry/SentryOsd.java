@@ -2,6 +2,7 @@ package com.cseini.bydsniffer.sentry;
 
 import java.util.Calendar;
 import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 
 // 영상 위 시각·배터리 표시(OSD) — 인코더가 변환해 둔 NV12 사본에만 그린다(감지·썸네일이 보는 원본 프레임은 건드리지 않아 시계 숫자가 움직임으로 잡히지 않는다).
 //   일렉트로 센트리 영상과 같은 모양(10-05 실영상 확인): 맨 위 반투명 검은 띠, 왼쪽에 날짜·시각, 옆에 배터리 모양과 잔량 %. 위치는 위/가운데/아래.
@@ -26,6 +27,39 @@ public final class SentryOsd implements PreRollEncoder.FrameOverlay {
         put(':', 0x00, 0x04, 0x04, 0x00, 0x04, 0x04, 0x00);
         put('%', 0x18, 0x19, 0x02, 0x04, 0x08, 0x13, 0x03);
         put(' ', 0, 0, 0, 0, 0, 0, 0);
+        // ★주행 정보 띠(주행 녹화, 운영자 10-11 "순정 블랙박스처럼") 글자 — 영문 대문자와 기호만(한글 글꼴 없이 ASCII 토큰으로)
+        put('A', 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11);
+        put('B', 0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E);
+        put('C', 0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E);
+        put('D', 0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E);
+        put('E', 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F);
+        put('F', 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10);
+        put('G', 0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F);
+        put('H', 0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11);
+        put('I', 0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E);
+        put('J', 0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C);
+        put('K', 0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11);
+        put('L', 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F);
+        put('M', 0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11);
+        put('N', 0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11);
+        put('O', 0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E);
+        put('P', 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10);
+        put('Q', 0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D);
+        put('R', 0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11);
+        put('S', 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E);
+        put('T', 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04);
+        put('U', 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E);
+        put('V', 0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04);
+        put('W', 0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A);
+        put('X', 0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11);
+        put('Y', 0x11, 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04);
+        put('Z', 0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F);
+        put('/', 0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10);
+        put('<', 0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02);
+        put('>', 0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08);
+        put('!', 0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04);
+        put('.', 0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C);
+        put('+', 0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00);
     }
 
     private static void put(char c, long... rows) {
@@ -36,25 +70,37 @@ public final class SentryOsd implements PreRollEncoder.FrameOverlay {
     private final boolean showBattery;
     private final String pos;
     private final IntSupplier battery;   // 0~100, 모르면 음수 — 음수면 배터리 표시를 생략
+    private final Supplier<String> info;   // 주행 정보 한 줄(ASCII 대문자 토큰) — null이면 띠를 만들지 않는다(센트리). 0.5초마다만 다시 읽는다
+    private long lastInfoMs = Long.MIN_VALUE;
+    private String infoText = "";
     private final Calendar cal = Calendar.getInstance();
     private long lastSec = Long.MIN_VALUE;
     private String timeText = "";
 
     public SentryOsd(boolean showDatetime, boolean showBattery, String pos, IntSupplier battery) {
+        this(showDatetime, showBattery, pos, battery, null);
+    }
+
+    public SentryOsd(boolean showDatetime, boolean showBattery, String pos, IntSupplier battery, Supplier<String> info) {
         this.showDatetime = showDatetime;
         this.showBattery = showBattery;
         this.pos = pos == null ? "top_left" : pos;
         this.battery = battery;
+        this.info = info;
     }
 
     @Override
     public void apply(byte[] nv12, int w, int h, long wallMs) {
-        if (!showDatetime && !showBattery) return;
+        if (!showDatetime && !showBattery && info == null) return;
         if (nv12 == null || w < 64 || h < 64 || nv12.length < w * h * 3 / 2) return;
         int barH = Math.max(16, Math.round(h * 0.0375f)) & ~1;
         int s = Math.max(1, (barH * 6 / 10) / 7);
         int barY = barY(h, barH);
         int pct = showBattery && battery != null ? Math.min(100, battery.getAsInt()) : -1;
+        if (!showDatetime && !showBattery) {
+            drawInfoBand(nv12, w, h, wallMs, barH, s, barY);   // 시각·배터리를 다 껐어도 주행 정보 띠는 그린다
+            return;
+        }
         dimBar(nv12, w, h, barY, barH);
 
         int ty = barY + (barH - 7 * s) / 2;
@@ -74,6 +120,27 @@ public final class SentryOsd implements PreRollEncoder.FrameOverlay {
             drawBattery(nv12, w, h, x, by, bw, bh, s, pct);
             drawText(nv12, w, h, x + bw + s * 4, ty, s, pt);
         }
+        drawInfoBand(nv12, w, h, wallMs, barH, s, barY);
+    }
+
+    // 둘째 띠 — 주행 정보. 위쪽 띠면 그 바로 아래, 아래쪽 띠면 그 바로 위. 정렬은 같은 규칙, 띠보다 길면 오른쪽을 자른다
+    private void drawInfoBand(byte[] nv12, int w, int h, long wallMs, int barH, int s, int barY) {
+        if (info == null) return;
+        if (wallMs / 500L != lastInfoMs) {
+            lastInfoMs = wallMs / 500L;
+            String t;
+            try { t = info.get(); } catch (RuntimeException e) { t = null; }
+            infoText = t == null ? "" : t;
+        }
+        if (infoText.isEmpty()) return;
+        int y2 = pos.startsWith("bottom") ? barY - barH : barY + barH;
+        if (y2 < 0 || y2 + barH > h) return;
+        y2 &= ~1;
+        dimBar(nv12, w, h, y2, barH);
+        int ty = y2 + (barH - 7 * s) / 2;
+        int maxChars = Math.max(1, (w - s * 8) / (6 * s));
+        String t = infoText.length() > maxChars ? infoText.substring(0, maxChars) : infoText;
+        drawText(nv12, w, h, alignX(w, t.length() * 6 * s, s), ty, s, t);
     }
 
     // 좌·중·우 정렬 시작 x(띠 안). 덩어리가 띠보다 넓으면 왼쪽 여백부터

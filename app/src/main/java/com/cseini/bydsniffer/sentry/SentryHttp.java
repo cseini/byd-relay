@@ -27,7 +27,7 @@ public final class SentryHttp {
 
     private SentryHttp() {}
 
-    public static boolean handles(String uri) { return uri != null && uri.startsWith("/sentry/"); }
+    public static boolean handles(String uri) { return uri != null && (uri.startsWith("/sentry/") || uri.startsWith("/drive/")); }   // /drive/* = 주행 녹화(같은 핸들러, 매니저만 다름)
 
     // 같은 기기 안(루프백)에서 온 요청인가 — 링크락 런처 WebView(127.0.0.1)용. ::1·::ffff:127.0.0.1도 같은 기기다
     static boolean isLoopback(String ip) {
@@ -40,14 +40,17 @@ public final class SentryHttp {
     public static Response serve(IHTTPSession session) {
         String uri = session.getUri();
         Method method = session.getMethod();
-        SentryManager m = SentryManager.get();
+        // ★주행 녹화(운영자 10-11): /drive/… 또는 ?kind=drive면 같은 핸들러를 주행 매니저로. 화면이 만드는 모든 링크가 grantQs를 덧붙이므로 kind도 거기 얹어 따라가게 한다
+        boolean drv = uri.startsWith("/drive/") || "drive".equals(session.getParms().get("kind"));
+        if (uri.startsWith("/drive/")) uri = "/sentry/" + uri.substring(7);
+        SentryManager m = SentryManager.of(drv ? "drive" : null);
         try {
-            String grantQs = "";
+            String grantQs = drv ? "&kind=drive" : "";
             if (m.lanAuthRequired() && !isLoopback(session.getRemoteIpAddress())) {   // ★공유판: 폰이 페어키로 만든 권한 값(?sgx=&sg=)이 있어야 목록·썸네일·영상·설정 전부 열린다. 같은 헤드유닛(127.0.0.1)의 링크락 런처는 권한 값 없이 허용(운영자 10-11 "로컬 허용")
                 Map<String, String> gq = session.getParms();
                 String sgx = gq.get("sgx"), sg = gq.get("sg");
                 if (sgx == null || sg == null || !m.verifyGrant(sgx, sg)) return text(Response.Status.UNAUTHORIZED, "grant");
-                grantQs = SentryAuth.grantQuery(sgx, sg);
+                grantQs = SentryAuth.grantQuery(sgx, sg) + (drv ? "&kind=drive" : "");
             }
             if (Method.GET.equals(method) || Method.HEAD.equals(method)) return serveGet(session, m, uri, grantQs);
             if (Method.POST.equals(method)) return servePost(session, m, uri);
@@ -241,7 +244,7 @@ public final class SentryHttp {
             String err = rp.start(o);
             return json(err == null ? rp.statusJson().put("ok", true).toString() : new JSONObject().put("ok", false).put("error", err).toString());
         }
-        if ("/sentry/format".equals(uri)) return json(m.formatVolume(o.optString("kind", ""), o.optString("id", ""), o.optString("confirm", "")).toString());   // 외장 포맷 — confirm:"format"과 지금 볼륨 id가 맞아야만, 시동 OFF에서만
+        if ("/sentry/format".equals(uri)) return json(SentryManager.get().formatVolume(o.optString("kind", ""), o.optString("id", ""), o.optString("confirm", "")).toString());   // 포맷은 늘 센트리 매니저(시동 꺼진 동안 저장소를 쓰는 쪽) — 주행 녹화 화면에서 눌러도 같다   // 외장 포맷 — confirm:"format"과 지금 볼륨 id가 맞아야만, 시동 OFF에서만
         if ("/sentry/cut".equals(uri)) return json(m.cutNow().toString());   // 지금 보기 — 현재 조각을 바로 닫음
         if ("/sentry/clear".equals(uri)) return json(m.clearAll(o.optString("confirm", "")).toString());   // 전체 삭제 — confirm:"all"이 있어야만
 
