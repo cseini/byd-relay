@@ -169,6 +169,7 @@ public final class SentryHttp {
 
         // 헤드유닛 런처용 화면(운영자 10-11): 달력+썸네일 그리드, [전체|즐겨찾기]. 운영자 도구 링크는 없다
         if ("/sentry/ui".equals(uri) || "/sentry/".equals(uri)) {
+            if ("storage".equals(q.get("tab"))) return html(SentryUiPage.buildStorage(grantQs));
             String date = q.get("date");
             if (date == null || date.isEmpty()) date = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
             if (!DATE.matcher(date).matches()) return text(Response.Status.BAD_REQUEST, "date");
@@ -207,7 +208,7 @@ public final class SentryHttp {
 
     private static Response servePost(IHTTPSession session, SentryManager m, String uri) throws Exception {
         if (!"/sentry/fav".equals(uri) && !"/sentry/delete".equals(uri)
-                && !"/sentry/settings".equals(uri) && !"/sentry/pause".equals(uri) && !"/sentry/clear".equals(uri) && !"/sentry/cut".equals(uri) && !"/sentry/replay".equals(uri) && !"/sentry/bsd/label".equals(uri)) {
+                && !"/sentry/settings".equals(uri) && !"/sentry/pause".equals(uri) && !"/sentry/clear".equals(uri) && !"/sentry/format".equals(uri) && !"/sentry/cut".equals(uri) && !"/sentry/replay".equals(uri) && !"/sentry/bsd/label".equals(uri)) {
             return text(Response.Status.NOT_FOUND, "not found");
         }
         String ct = session.getHeaders().get("content-type");
@@ -240,6 +241,7 @@ public final class SentryHttp {
             String err = rp.start(o);
             return json(err == null ? rp.statusJson().put("ok", true).toString() : new JSONObject().put("ok", false).put("error", err).toString());
         }
+        if ("/sentry/format".equals(uri)) return json(m.formatVolume(o.optString("kind", ""), o.optString("id", ""), o.optString("confirm", "")).toString());   // 외장 포맷 — confirm:"format"과 지금 볼륨 id가 맞아야만, 시동 OFF에서만
         if ("/sentry/cut".equals(uri)) return json(m.cutNow().toString());   // 지금 보기 — 현재 조각을 바로 닫음
         if ("/sentry/clear".equals(uri)) return json(m.clearAll(o.optString("confirm", "")).toString());   // 전체 삭제 — confirm:"all"이 있어야만
 

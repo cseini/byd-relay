@@ -571,6 +571,15 @@ public final class SentryStorage {
         return out;
     }
 
+    // 마운트된 외장 볼륨의 {uuid(없으면 빈 문자열), 이름} — kind는 sd(첫째)·usb(둘째). 없으면 null
+    public String[] removableOf(String kind) {
+        List<Vol> rem = removableMounted();
+        int i = "sd".equals(kind) ? 0 : "usb".equals(kind) ? 1 : -1;
+        if (i < 0 || i >= rem.size()) return null;
+        Vol v = rem.get(i);
+        return new String[]{v.uuid == null ? "" : v.uuid, v.label == null ? "" : v.label};
+    }
+
     // StorageVolume.getPath()는 숨김 API라 리플렉션, 실패하면 null(호출자가 /storage/<uuid>로 대체)
     private static String volumePath(StorageVolume sv) {
         try {

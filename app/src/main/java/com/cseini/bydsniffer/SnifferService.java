@@ -2150,7 +2150,7 @@ public class SnifferService extends Service {
         if ("CLOUDFLASH".equals(action)) return cloudFlash();   // ★릴레이가 클라우드로 비상등. 2026-09-03 공유판도 허용.
         if ("CAMSHOT".equals(action)) return camShot(params);
         if ("CAMDUALPROBE".equals(action)) return camOffOn() ? CAM_OFF_MSG : clusterDualProbe();   // ★클러스터 2단계 진단(2026-09-17) — 전방 감지 중 AVM view5 동시 open 가능 여부 실차 판정
-        if ("SENTRY_SET".equals(action) || "SENTRY_STATUS".equals(action) || "SENTRY_LIST".equals(action) || "SENTRY_CALENDAR".equals(action) || "SENTRY_CLEAR".equals(action) || "SENTRY_DELETE".equals(action) || "SENTRY_FAV".equals(action) || "SENTRY_THUMB".equals(action) || "SENTRY_CUT".equals(action) || "SENTRY_MARKS".equals(action)) {   // ★센트리(docs/SENTRY-DESIGN.md 훅 v2) — relay-loop 인라인이라 SET은 새 스레드로 넘기고 즉시 반환, STATUS는 파일시스템을 안 만지는 캐시만
+        if ("SENTRY_SET".equals(action) || "SENTRY_STATUS".equals(action) || "SENTRY_LIST".equals(action) || "SENTRY_CALENDAR".equals(action) || "SENTRY_CLEAR".equals(action) || "SENTRY_DELETE".equals(action) || "SENTRY_FORMAT".equals(action) || "SENTRY_FAV".equals(action) || "SENTRY_THUMB".equals(action) || "SENTRY_CUT".equals(action) || "SENTRY_MARKS".equals(action)) {   // ★센트리(docs/SENTRY-DESIGN.md 훅 v2) — relay-loop 인라인이라 SET은 새 스레드로 넘기고 즉시 반환, STATUS는 파일시스템을 안 만지는 캐시만
             if (DiLink5Support.isDiLink5() && !BuildConfig.D5_SENTRY) return "센트리는 DiLink3(돌핀·아토3·씰) 전용";   // ★공유판은 매니저 미초기화라 ok:true로 오인되지 않게 거부(씨라7 시험판 D5_SENTRY만 예외)
             if ("SENTRY_STATUS".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().cachedStatusJson().toString()); return null; }   // ★null=ok:true, 상태는 data로(DATAUSE 방식)
             if ("SENTRY_LIST".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteList(params != null ? params.optString("date") : null).toString()); return null; }   // ★집에서 보는 목록 — 하루치 7000자 이내(워커 8000자 절단)
@@ -2176,6 +2176,9 @@ public class SnifferService extends Service {
                 }
                 if (dels.isEmpty()) return "삭제할 id가 없음";
                 RelayClient.RESULT_DATA.set(SentryManager.get().deleteEvents(dels).toString()); return null;
+            }
+            if ("SENTRY_FORMAT".equals(action)) {   // ★외장(SD·USB) 포맷(운영자 10-11) — params {"kind":"sd|usb","id":"<볼륨 id>","confirm":"format"}. 시동 OFF에서만, 응답 {"ok","pending"}, 진행·결과는 relay_state.sentry fmt / SENTRY_STATUS format
+                RelayClient.RESULT_DATA.set(SentryManager.get().formatVolume(params != null ? params.optString("kind") : null, params != null ? params.optString("id") : null, params != null ? params.optString("confirm") : null).toString()); return null;
             }
             if ("SENTRY_CLEAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().clearAll(params != null ? params.optString("confirm") : null).toString()); return null; }   // ★녹화 전체 삭제 — confirm:"all" 필수, 지우기는 뒤에서 이어짐
             if ("SENTRY_CALENDAR".equals(action)) { RelayClient.RESULT_DATA.set(SentryManager.get().remoteCalendar(params != null ? params.optString("month") : null).toString()); return null; }   // ★집에서 보는 달력 — 한 달치 날짜별 이벤트 수
@@ -4928,6 +4931,7 @@ public class SnifferService extends Service {
             @Override public boolean conservativeRetry() { return DiLink5Support.isDiLink5(); }
             @Override public boolean lowVoltage() { return lowVoltFlag == 1 && lowSinceMs > 0 && System.currentTimeMillis() - lowSinceMs > lowSustainMs; }
             @Override public int batteryPct() { return lastTripSoc; }
+            @Override public String runShell(String cmd) { return AdbAccess.runShell(SnifferService.this, cmd); }
             @Override public float[] objectScores(byte[] nv21, int w, int h) { return sentryObjectScores(nv21, w, h); }
             @Override public float[][] objectDetect(byte[] nv21, int w, int h, int rx, int ry, int rw, int rh, float minScore) { return sentryObjectDetect(nv21, w, h, rx, ry, rw, rh, minScore); }
             @Override public boolean replayAllowed() { return BuildConfig.IS_OPERATOR && lastGearVal == 3 && lastDriving != 1 && !(lastSpeed > 0.5) && !lowVoltage(); }   // 12V가 낮아지면 재생 시험은 중간에도 멈춘다(차 배터리 보호)
@@ -8229,7 +8233,9 @@ public class SnifferService extends Service {
                         //   번갈아 0↔실값 플랩(09-27 씨라7 테스트2 "turn 항상 0"·BSD turnOnly 알림 死의 원인). D5 turnflash는 startD5Poller 전담.
                         if (ldev != null && relay != null && !DiLink5Support.isDiLink5()) {
                             int tf = callGetInt0(ldev, "getTurnLightFlashState");
-                            if (tf >= 0 && !(tf != turnEvtVal && System.currentTimeMillis() - turnEvtAt < 600))   // ★739 이벤트 직후 getter가 아직 옛값이면 덮지 않음
+                            if (tf >= 0 && tf <= 1) turnReleasedSide = 0;
+                            boolean releasedTail = turnReleasedSide != 0 && tf == turnReleasedSide && System.currentTimeMillis() - turnReleasedAt < 3000;   // ★873
+                            if (tf >= 0 && !releasedTail && !(tf != turnEvtVal && System.currentTimeMillis() - turnEvtAt < 600))   // ★739 이벤트 직후 getter가 아직 옛값이면 덮지 않음
                                 applyTurnFlash(tf, "poll", System.currentTimeMillis());   // ★2026-09-17 이벤트 경로와 같은 적용 함수(turnflash/hazard + 클러스터 측면 카메라 판단). 폴은 백스톱
                         }
                     } catch (Throwable ignored) {
@@ -9808,13 +9814,22 @@ public class SnifferService extends Service {
     // ★739 이벤트값 1·2·4는 getter가 따라잡은 최종값과 늘 같았다(10-04 실측 7일 90/90: evt 4→4·evt 2→2·evt 1→1) — getter 확인(평균 0.18초, 불일치면 +150ms)
     //   없이 바로 적용해 카메라 창이 그만큼 빨리 뜬다. 그 밖의 값(5·6 등)만 getter로 확정. 폴(백스톱)은 이벤트 직후 0.6초 동안 다른 값이면 무시(getter가 아직 옛값).
     private volatile long turnEvtAt; private volatile int turnEvtVal = -1;
+    private volatile int turnReleasedSide; private volatile long turnReleasedAt;   // ★873 잡았다 놓은 쪽 — 등이 꺼질 때까지(최대 3초) 폴이 이 값을 다시 켜지 않게
     // ★816 꺼짐(1)은 바로 적용하지 않는다 — 이 이벤트는 레버 위치라, 한 번 딸깍(3번 깜빡임)이면 레버는 0.3초 만에 돌아와도 등은 계속 깜빡인다.
     //   바로 끄면 창이 닫혔다가 폴이 '아직 깜빡임'을 읽어 다시 떴다(운영자 10-06 "우리 영상도 깜빡 난리나", 19:43:05 꺼짐 0.3초→0.55초 쉼→2.3초 다시 뜸).
     private void onTurnSignalEvent(final int intVal) {
         final long ts = System.currentTimeMillis();
         if (intVal == 2 || intVal == 4) {
-            turnEvtAt = ts; turnEvtVal = intVal;
+            turnEvtAt = ts; turnEvtVal = intVal; turnReleasedSide = 0;
             new Thread(() -> applyTurnFlash(intVal, "evt " + intVal, ts), "turn-evt").start();
+            return;
+        }
+        // ★873 레버를 0.6초 넘게 잡고 있다 놓았으면 한 번 딸깍(편의 3번 깜빡임)이 아니다 — 등이 마저 꺼질 때까지(0.6~2초, 10-11 실측 닫힘 0.86~2.3초) 기다리지 않고
+        //   바로 끈다(운영자 10-11 "꺼지는 속도가 0.3초 셋팅인데 너무 오래 걸리네"). 폴이 아직 깜빡이는 같은 쪽 값을 읽어 창을 다시 띄우지 않게 등이 꺼질 때까지 그 값만 무시.
+        if (intVal == 1 && (turnEvtVal == 2 || turnEvtVal == 4) && ts - turnEvtAt >= 600) {
+            final int side = turnEvtVal; final long held = ts - turnEvtAt;
+            turnReleasedSide = side; turnReleasedAt = ts; turnEvtAt = ts; turnEvtVal = 1;
+            new Thread(() -> { postToD1("HUASSIST", "깜빡이 레버 " + held + "ms 잡았다 놓음 — 바로 끔"); applyTurnFlash(1, "evt 1 레버 놓음", ts); }, "turn-evt").start();
             return;
         }
         new Thread(() -> {
@@ -10866,6 +10881,7 @@ public class SnifferService extends Service {
             if ("MOUSE".equals(action)) return MouseInjector.handle(this, params);
             // ★871 링크락 런처 요청(운영자 10-11) — 순정 홈 되돌리기(탈출 버튼, 게이트 없음)·공조 전원 켜고 끄기·비상등(클라우드)
             if ("RESTOREHOME".equals(action)) return restoreStockHome();
+            if ("BACK".equals(action)) { SplitLauncher.Res r = SplitLauncher.adb(this, "input keyevent 4"); return r.ok ? "뒤로" : "뒤로 실패 " + r.exit; }   // ★873 런처 하단바 ◁(운영자 10-11 런처 실차 시험)
             if ("CLIMATE".equals(action)) {
                 Object cur = relay != null ? relay.getStatus("ac_start_st") : null;
                 int v = params != null && params.has("on") ? (params.optBoolean("on") ? 1 : 0) : ((cur instanceof Integer && (Integer) cur == 1) ? 0 : 1);

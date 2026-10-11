@@ -69,6 +69,42 @@ public class SentryManagerTest {
     }
 
     @Test
+    public void trimStatus_keepsEstH_evenWhenTrimming() throws JSONException {
+        JSONObject o = new JSONObject();
+        o.put("state", "RECORDING");
+        o.put("estH", 14.8);
+        o.put("err", new String(new char[400]).replace('\0', 'x'));
+        o.put("lastEvent", "2026-10-05_23h00m12s");
+        o.put("fps", 26);
+        String t = SentryManager.trimStatus(o);
+        assertTrue(t.length() <= 300);
+        assertEquals(14.8, new JSONObject(t).getDouble("estH"), 0.001);
+    }
+
+    @Test
+    public void smVolumeId_matchesByFsUuid_andRefusesAmbiguity() {
+        String two = "public:8,97 mounted 95F1-1C00\npublic:8,113 mounted 1234-ABCD\n";
+        assertEquals("public:8,97", SentryManager.smVolumeId(two, "95f1-1c00"));
+        assertEquals("public:8,113", SentryManager.smVolumeId(two, "1234-ABCD"));
+        assertNull(SentryManager.smVolumeId(two, "FFFF-FFFF"));
+        assertNull(SentryManager.smVolumeId(two, ""));
+        assertNull(SentryManager.smVolumeId(null, "95F1-1C00"));
+        assertNull(SentryManager.smVolumeId("public:8,97 mounted 95F1-1C00\npublic:8,98 mounted 95F1-1C00\n", "95F1-1C00"));
+        assertNull(SentryManager.smVolumeId("private:8,97 mounted 95F1-1C00\n", "95F1-1C00"));
+        assertNull(SentryManager.smVolumeId("public:8,97;reboot mounted 95F1-1C00\n", "95F1-1C00"));
+        assertNull(SentryManager.smVolumeId("public:8,97 unmountable\n", "95F1-1C00"));
+    }
+
+    @Test
+    public void smVolumeState_readsStateOfTheVolume() {
+        String l = "public:8,97 unmounted 95F1-1C00\npublic:8,113 mounted 1234-ABCD\n";
+        assertEquals("unmounted", SentryManager.smVolumeState(l, "public:8,97"));
+        assertEquals("mounted", SentryManager.smVolumeState(l, "public:8,113"));
+        assertNull(SentryManager.smVolumeState(l, "public:8,99"));
+        assertNull(SentryManager.smVolumeState(null, "public:8,97"));
+    }
+
+    @Test
     public void remoteMonthOk_acceptsOnlyValidYearMonth() {
         assertTrue(SentryManager.remoteMonthOk("2026-10"));
         assertTrue(SentryManager.remoteMonthOk("2026-01"));

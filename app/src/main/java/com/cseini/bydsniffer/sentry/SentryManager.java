@@ -133,6 +133,11 @@ public final class SentryManager {
     // ★저장소 입출력 분리(10-06 FB2106·공유판 193407 — 외장(SD·USB)이 마운트로 보이는데 입출력이 죽으면 무장·상태 업로드의 파일·바인더 호출이 안 돌아와 핸들러 스레드가 통째로 멈췄다).
     //   무장·주기 점검·상태 업로드의 저장소 입출력은 별도 'sentry-io' 스레드에서 돌린다. 무장은 5초 안에 못 끝내면 내장 저장소로 진행하고 상태에 ioDelay를 남긴다.
     private final java.util.concurrent.ExecutorService ioExec = java.util.concurrent.Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "sentry-io"); t.setDaemon(true); return t; });
+    private final AtomicBoolean formatBusy = new AtomicBoolean();   // 외장 포맷 진행 중
+    private volatile String formatState = null;   // null=기록 없음, running|done|failed
+    private volatile String formatKind = "";
+    private volatile String formatWhy = "";
+    private volatile long formatAtMs = 0;
     private final java.util.concurrent.atomic.AtomicBoolean ioBusy = new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> ioQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final java.util.concurrent.atomic.AtomicBoolean publishPending = new java.util.concurrent.atomic.AtomicBoolean();
@@ -568,6 +573,8 @@ public final class SentryManager {
             o.put("spaceState", spaceStateName(spaceLevelCache));   // ok|warn|critical|full — when_full=stop일 때만 ok가 아닐 수 있음. 앱이 열릴 때 팝업 판단용
             o.put("spacePct", spacePctCache);
             o.put("whenFull", settings.whenFull);
+            String fs = formatState;
+            if (fs != null) o.put("format", new JSONObject().put("state", fs).put("kind", formatKind).put("why", formatWhy).put("at", formatAtMs));   // 마지막 외장 포맷 결과(running|done|failed)
             o.put("leftoverEvents", leftoverCount);   // 내장에 임시로 녹화돼 외장으로 옮겨질 차례를 기다리는 이벤트 수(0이면 없음)
             JSONObject ls = lastSummaryJson;
             if (ls == null) {   // 릴레이가 재시작된 뒤에도 마지막 요약을 보여 준다
@@ -781,6 +788,100 @@ public final class SentryManager {
         });
         try {
             return new JSONObject().put("ok", true).put("deleted", n).put("freedMb", mb);
+        } catch (JSONException e) {
+            return errorJson("응답 생성 실패");
+        }
+    }
+
+    private static final java.util.regex.Pattern SM_VOLUME_ID = java.util.regex.Pattern.compile("public:\\d+,\\d+");
+
+    // `sm list-volumes public` 출력("public:8,97 mounted 95F1-1C00" 줄들)에서 파일시스템 UUID가 같은 볼륨 id. 없거나 id 모양이 이상하면 null
+    static String smVolumeId(String list, String uuid) {
+        if (list == null || uuid == null || uuid.isEmpty()) return null;
+        String found = null;
+        for (String ln : list.split("\n")) {
+            String[] p = ln.trim().split("\\s+");
+            if (p.length >= 3 && SM_VOLUME_ID.matcher(p[0]).matches() && p[2].equalsIgnoreCase(uuid)) {
+                if (found != null) return null;   // 같은 UUID가 둘이면 어느 쪽인지 알 수 없다 — 지우지 않는다
+                found = p[0];
+            }
+        }
+        return found;
+    }
+
+    // 같은 출력에서 볼륨 id의 상태(mounted·unmounted·formatting…), 줄이 없으면 null
+    static String smVolumeState(String list, String volId) {
+        if (list == null) return null;
+        for (String ln : list.split("\n")) {
+            String[] p = ln.trim().split("\\s+");
+            if (p.length >= 2 && volId.equals(p[0])) return p[1];
+        }
+        return null;
+    }
+
+    // ★외장(microSD·USB) 포맷(운영자 10-11 "usb나 sd는 포맷 기능도") — 셸 `sm format`. 시동 OFF에서만, 앱이 보여 준 볼륨 id가 지금 볼륨과 같아야만(다른 카드로 바뀐 경우 막음).
+    //   즉시 {"ok":true,"pending":true}를 돌려주고 별도 스레드에서: 센트리 저장소 양보 → sm format → 다시 마운트 → 양보 해제. 결과는 상태 format / relay_state fmt
+    public JSONObject formatVolume(String kind, String id, String confirm) {
+        SentryHost hs = host;
+        SentryStorage st = storage;
+        SentrySettings s = settings;
+        if (hs == null || st == null || s == null) return errorJson("센트리 초기화 전");
+        if (SentrySettings.isInternalOnly()) return errorJson("이 기기는 외장 포맷을 지원하지 않음");
+        if (!"format".equals(confirm)) return errorJson("confirm");
+        if (!"sd".equals(kind) && !"usb".equals(kind)) return errorJson("kind");
+        if (hs.ignitionState() != 0) return errorJson("시동을 끄고 주차 중일 때만 포맷할 수 있음");
+        final String[] vol = st.removableOf(kind);
+        if (vol == null) return errorJson("마운트된 " + ("sd".equals(kind) ? "microSD" : "USB") + " 없음");
+        if (vol[0].isEmpty()) return errorJson("볼륨 식별 불가");
+        if (!vol[0].equalsIgnoreCase(id == null ? "" : id)) return errorJson("볼륨이 바뀜 — 저장소 목록을 새로 고친 뒤 다시");
+        if (clearing.get() || migrateIoPending.get()) return errorJson("삭제·이동 중 — 잠시 뒤 다시");
+        final boolean mine = kind.equals(s.storage);
+        if (mine && state == State.RECORDING) return errorJson("녹화 중 — 끝난 뒤 다시");
+        if (!formatBusy.compareAndSet(false, true)) return errorJson("이미 포맷 중");
+        formatState = "running"; formatKind = kind; formatWhy = ""; formatAtMs = System.currentTimeMillis();
+        log("외장 포맷 시작 — " + kind + " " + vol[0] + (mine ? " (센트리 저장소 양보)" : ""));
+        publishStatus();
+        Thread th = new Thread(() -> {
+            String res = null;
+            try {
+                String list = hs.runShell("sm list-volumes public 2>&1");
+                if (list == null) { res = "차 셸에 붙지 못함"; return; }
+                final String volId = smVolumeId(list, vol[0]);
+                if (volId == null) { res = "차에서 해당 볼륨을 못 찾음"; return; }
+                if (mine) yieldStorage("포맷");
+                String out = hs.runShell("sm format " + volId + " 2>&1");
+                log("sm format " + volId + " → " + (out == null ? "셸 끊김" : out));
+                if (out == null) { res = "포맷 중 셸이 끊김 — 상태를 확인하세요"; return; }
+                String lo = out.toLowerCase(java.util.Locale.US);
+                if (lo.contains("exception") || lo.contains("error") || lo.contains("fail")) { res = "포맷 실패: " + (out.length() > 80 ? out.substring(0, 80) : out); return; }
+                boolean up = false;
+                long end = SystemClock.elapsedRealtime() + 90_000L;
+                int tries = 0;
+                while (SystemClock.elapsedRealtime() < end) {
+                    String l2 = hs.runShell("sm list-volumes public 2>&1");
+                    String stt = smVolumeState(l2, volId);
+                    if ("mounted".equals(stt)) { if (st.removableOf(kind) != null) { up = true; break; } }
+                    else if (stt != null && tries++ % 2 == 0) hs.runShell("sm mount " + volId + " 2>&1");
+                    try { Thread.sleep(3000L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                }
+                if (!up) { res = "포맷은 끝났지만 다시 마운트되지 않음 — 카드를 뺐다 꽂아 보세요"; return; }
+                SentryIndex.bumpRev();
+            } catch (Throwable t) {
+                res = "포맷 오류: " + t;
+            } finally {
+                formatState = res == null ? "done" : "failed";
+                formatWhy = res == null ? "" : res;
+                formatAtMs = System.currentTimeMillis();
+                log("외장 포맷 " + ("done".equals(formatState) ? "완료" : "실패 — " + res) + " (" + kind + ")");
+                formatBusy.set(false);
+                if (mine) storageBack();
+                ioPost(() -> { refreshStats(); publishStatusNow(); });
+                post(this::reevaluate);
+            }
+        }, "sentry-format");
+        th.start();
+        try {
+            return new JSONObject().put("ok", true).put("pending", true);
         } catch (JSONException e) {
             return errorJson("응답 생성 실패");
         }
@@ -1510,8 +1611,12 @@ public final class SentryManager {
             o.put("tier", st.tier());
             o.put("usedMb", usedMbCache);
             o.put("limitMb", st.limitMb());
+            SentrySettings es = settings;
+            o.put("estH", SentryStorage.calcEstimateHours(st.limitMb(), es.kbpsFor(es.resolution)));   // 원격 상태에서도 예상 저장 시간(시간 단위, 지금 해상도·프레임 기준)을 보이게(운영자 10-11)
             o.put("spaceState", spaceStateName(spaceLevelCache));
             o.put("spacePct", spacePctCache);
+            String fs = formatState;
+            if (fs != null && (formatBusy.get() || System.currentTimeMillis() - formatAtMs < 600_000L)) o.put("fmt", formatKind + ":" + ("running".equals(fs) ? "run" : "done".equals(fs) ? "ok" : "fail"));   // 원격 상태에 포맷 진행·결과(끝나고 10분만)
             o.put("events", eventsCache);
             o.put("lastEvent", lastEvent);
             o.put("fallback", st.fallback());

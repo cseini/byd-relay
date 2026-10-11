@@ -21,6 +21,7 @@ public interface SentryHost {
     boolean lowVoltage();                      // 12V 저전압 지속(상시생존의 sustainedLow) — 센트리도 멈춤
     default boolean camOff() { return false; }   // 앱 설정에서 카메라 기능을 꺼 둠(cam_off) — 센트리는 카메라를 못 쓰므로 IDLE로 쉰다(켜질 때까지 1분마다 무장 시도·실패 로그가 쌓이지 않게)
     default int batteryPct() { return -1; }
+    default String runShell(String cmd) { return null; }   // 차 셸(shell uid) 1회 실행 — 출력, 셸에 못 붙으면 null. 외장 포맷(sm format)에만 쓴다
     default float[] objectScores(byte[] nv21, int w, int h) { return null; }   // 4칸 각각에서 잰 {사람 최고 점수, 차량 최고 점수}(0~1), 모델이 없거나 실패면 null — null이면 거르지 않고 통과(안전 쪽)
     default long objectLastMs() { return 0; }
     // 재생 시험(저장된 녹화를 차 안에서 다시 돌려 판정)을 지금 돌려도 되는가 — 운영자판이 주차(P)·정차일 때만
